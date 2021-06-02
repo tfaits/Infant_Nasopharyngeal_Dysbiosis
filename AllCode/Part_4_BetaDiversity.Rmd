@@ -1,0 +1,873 @@
+---
+title: "Part 4: Beta Diversity"
+author: "Tyler Faits"
+date: "6/9/2020"
+output:
+    html_document:
+      toc: true
+      toc_depth: 2
+      number_sections: true
+      code_folding: hide
+---
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+setwd("/Users/labadmin2/Documents/infant_gill/ProperLabels")
+require(ggplot2)
+require(ComplexHeatmap)
+require(reshape2)
+library(RColorBrewer)
+require(DESeq2)
+require(gridExtra)
+require(Rmisc)
+require(vegan)
+require(circlize)
+require(hclust)
+require(NbClust)
+#Create color palette to be used for plotting
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+#Load the count matrixes for phylum, genus, and species
+phyla <- readRDS("RefSeq2_p.RDS")
+genus <- readRDS("RefSeq2_g.RDS")
+species <- readRDS("RefSeq2_s.RDS")
+
+#delta/epsilon subdivisions is a part of Proteobacteria, so we're going with that.
+phyla["Proteobacteria",] <- phyla["Proteobacteria",] + phyla["delta/epsilon subdivisions",]
+phyla <- phyla[rownames(phyla) != "delta/epsilon subdivisions",]
+#Require more than 1000 reads in a sample to be analyzed
+phyla <- phyla[,apply(phyla,2,sum)>10000]
+phyla <- phyla[apply(phyla,1,sum) > 10,]
+genus <- genus[,apply(genus,2,sum)>10000]
+genus <- genus[apply(genus,1,sum) > 10,]
+species <- species[,apply(species,2,sum)>10000]
+species <- species[apply(species,1,sum) > 10,]
+colnames(genus) <- gsub("S|S0","X",colnames(genus))
+colnames(phyla) <- gsub("S|S0","X",colnames(phyla))
+colnames(species) <- gsub("S|S0","X",colnames(species))
+colnames(genus)[grep("DNA",colnames(genus))] <- c("DNA1","DNA2","DNA3","DNA4","DNA5")
+colnames(phyla)[grep("DNA",colnames(phyla))] <- c("DNA1","DNA2","DNA3","DNA4","DNA5")
+colnames(species)[grep("DNA",colnames(species))] <- c("DNA1","DNA2","DNA3","DNA4","DNA5")
+#Create a counts-per-million matrix for each taxonomic level
+CPMphyla <- t(t(phyla)/apply(phyla,2,sum)*1000000)
+CPMgenus <- t(t(genus)/apply(genus,2,sum)*1000000)
+CPMspecies <- t(t(species)/apply(species,2,sum)*1000000)
+map <- readRDS("../InfantMappingData2.RDS")
+map$PrePostSympt[is.na(map$PrePostSympt)] <- "none"
+map$PrePostSympt[map$PrePostSympt=="none"] <- "Healthy"
+map$PrePostSympt[map$Symptoms=="Yes" & !is.na(map$Symptoms)] <- "Active"
+
+fullGenus <- readRDS("ggGenusWithClusters.RDS")
+
+BetaDivMap <- vegdist(t(CPMgenus[,map$Sample[map$MothChild=="Infant" & map$Sample %in% colnames(CPMgenus) & map$Age < 1000]]), method="bray")
+healthyBetaDivMap <- vegdist(t(CPMgenus[,map$Sample[map$MothChild=="Infant" & map$Sample %in% colnames(CPMgenus) & map$Age < 1000 & map$InfectionStatus=="Healthy"]]), method="bray")
+sickBetaDivMap <- vegdist(t(CPMgenus[,map$Sample[map$MothChild=="Infant" & map$Sample %in% colnames(CPMgenus) & map$Age < 1000 & map$InfectionStatus=="RespiratoryIllness"]]), method="bray")
+```
+
+## Bray-Curtis heatmaps {.tabset}
+
+### Healthy only {.tabset}
+
+#### Heatmap
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+MyDendroHealthy <- hclust(healthyBetaDivMap, method="ward.D")
+#Silhouette index maxes out at 5 clusters
+#plot(3:21,NbClust(diss=healthyBetaDivMap, distance=NULL, method="ward.D", min.nc=3, max.nc=21, index="silhouette")$All.index)
+#Frey index maxes out at 15 clusters (huge outlier)
+#plot(3:21,NbClust(diss=healthyBetaDivMap, distance=NULL, method="ward.D", min.nc=3, max.nc=21, index="frey")$All.index)
+
+#Should label 5/15 clusters for healthy infants only
+healthyClusters5 <- cutree(MyDendroHealthy, k=5)
+healthyClusters15 <- cutree(MyDendroHealthy, k=15)
+col_fun = colorRamp2(c(0,60,120),c("white","yellow","black"))
+
+healthyTopAnno <- HeatmapAnnotation(Age=map$Age[map$Sample %in% colnames(as.matrix(healthyBetaDivMap))],
+                             #HIV_Exposure=map$HIVStatus[map$Sample %in% colnames(as.matrix(healthyBetaDivMap))],
+                             Cluster=healthyClusters5,
+                             MoreCluster=healthyClusters15,
+                             col=list(Age=col_fun,
+                                      #HIV_Exposure=c("Control"="blue","HIV"="red"),
+                                      Cluster=c("1"=col_vector[1],"2"=col_vector[2],"3"=col_vector[3],"4"=col_vector[4],"5"=col_vector[5]),
+                                      MoreCluster=c("1"=col_vector[1],"2"=col_vector[2],"3"=col_vector[3],"4"=col_vector[4],"5"=col_vector[5],
+                            "6"=col_vector[6],"7"=col_vector[7],"8"=col_vector[8],"9"=col_vector[9],"10"=col_vector[10],
+                            "11"=col_vector[11],"12"=col_vector[12],"13"=col_vector[13],"14"=col_vector[14],"15"=col_vector[15])))
+Heatmap(as.matrix(healthyBetaDivMap), top_annotation = healthyTopAnno, show_row_names = FALSE,
+        show_column_names = FALSE, name = "Bray-Curtis", cluster_rows = MyDendroHealthy, cluster_columns = MyDendroHealthy,
+        column_title = "Bray-Curtis dissimilarity matrix", column_title_gp = gpar(fontsize = 20, fontface = "bold"))
+
+fullGenus$HC5 <- 0
+for(i in 1:5){
+  fullGenus$HC5[fullGenus$Sample %in% names(healthyClusters5)[healthyClusters5==i]] <- i
+}
+fullGenus$HC15 <- 0
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 1]] <- "1a"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 5]] <- "1b"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 7]] <- "1c"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 14]] <- "1d"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 2]] <- "2"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 12]] <- "3b"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 13]] <- "3c"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 15]] <- "3d"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 3]] <- "3a"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 4]] <- "4a"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 8]] <- "4b"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 9]] <- "4c"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 10]] <- "5a"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 11]] <- "5b"
+fullGenus$HC15[fullGenus$Sample %in% names(healthyClusters15)[healthyClusters15 == 6]] <- "5c"
+```
+
+#### PCoA {.tabset}
+
+##### Age
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+require(ape)
+healthyPCoA <- pcoa(healthyBetaDivMap)
+plotHealthyPCoA <- data.frame(healthyPCoA$vectors[,1:6])
+colnames(plotHealthyPCoA) = c("PC_1","PC_2","PC_3","PC_4","PC_5","PC_6")
+plotHealthyPCoA$Subject <- factor(map[rownames(healthyPCoA$vectors),"Subject"])
+plotHealthyPCoA$Age <- map[rownames(healthyPCoA$vectors),"Age"]
+# head(healthyPCoA$values)
+ggplot(plotHealthyPCoA, aes(x=PC_1, y=PC_2, fill=Age)) +
+  geom_point(size=5, shape=21, color="black") +
+  theme_linedraw() +
+  scale_fill_gradient2(name="Age",low="white",mid="yellow",high="black",midpoint=60) +
+  theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+  theme(legend.text = element_text(colour="grey35", size = 18, face = "bold.italic")) +
+  theme(legend.title = element_text(colour="grey20", size = 22, face = "bold")) + 
+  xlab("PC1 (RCE:0.06)") +
+  ylab("PC2 (RCE:0.05)") +
+  theme(axis.text.x  = element_text(size=20, angle = 90, vjust = 0.5)) +
+  theme(axis.text.y  = element_text(size=20)) +
+  ggtitle("PCoA (on  Bray-Curtis distances)\nof healthy infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results="asis"}
+genCols <- list(Staphylococcus="lightblue",Streptococcus="dodgerblue3",Moraxella="gold",Dolosigranulum="deeppink",Corynebacterium="mediumpurple1",Haemophilus="olivedrab",Anaerobacillus="aquamarine",Bacillus="orange",Delftia="red",Other="")
+for(taxon in c("Staphylococcus","Streptococcus","Moraxella","Dolosigranulum","Corynebacterium","Haemophilus")){
+  cat("\n#####", taxon, "\n")
+  plotHealthyPCoA[[taxon]] <- unlist(lapply(rownames(plotHealthyPCoA),function(x){CPMgenus[taxon,x]/10000}))
+  myPlot <- ggplot(plotHealthyPCoA, aes(x=PC_1, y=PC_2, fill=plotHealthyPCoA[[taxon]])) +
+    geom_point(size=5, shape=21, color="black") +
+    theme_linedraw() +
+    scale_fill_gradient2(name=taxon,low="white",mid=genCols[[taxon]],high="black",midpoint=mean(plotHealthyPCoA[[taxon]])) +
+    theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+    theme(legend.text = element_text(colour="grey35", size = 18, face = "bold.italic")) +
+    theme(legend.title = element_text(colour="grey20", size = 22, face = "bold")) + 
+    xlab("PC1 (RCE:0.06)") +
+    ylab("PC2 (RCE:0.05)") +
+    theme(axis.text.x  = element_text(size=20, angle = 90, vjust = 0.5)) +
+    theme(axis.text.y  = element_text(size=20)) +
+    ggtitle("PCoA (on  Bray-Curtis distances)\nof healthy infants") +
+    theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+  print(myPlot)
+  myPlot <- ggplot(plotHealthyPCoA, aes(x=PC_3, y=PC_4, fill=plotHealthyPCoA[[taxon]])) +
+    geom_point(size=5, shape=21, color="black") +
+    theme_linedraw() +
+    scale_fill_gradient2(name=taxon,low="white",mid=genCols[[taxon]],high="black",midpoint=mean(plotHealthyPCoA[[taxon]])) +
+    theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+    theme(legend.text = element_text(colour="grey35", size = 18, face = "bold.italic")) +
+    theme(legend.title = element_text(colour="grey20", size = 22, face = "bold")) + 
+    xlab("PC3 (RCE:0.04)") +
+    ylab("PC4 (RCE:0.02)") +
+    theme(axis.text.x  = element_text(size=20, angle = 90, vjust = 0.5)) +
+    theme(axis.text.y  = element_text(size=20)) +
+    ggtitle("PCoA (on  Bray-Curtis distances)\nof healthy infants") +
+    theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+  print(myPlot)
+  myPlot <- ggplot(plotHealthyPCoA, aes(x=PC_5, y=PC_6, fill=plotHealthyPCoA[[taxon]])) +
+    geom_point(size=5, shape=21, color="black") +
+    theme_linedraw() +
+    scale_fill_gradient2(name=taxon,low="white",mid=genCols[[taxon]],high="black",midpoint=mean(plotHealthyPCoA[[taxon]])) +
+    theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+    theme(legend.text = element_text(colour="grey35", size = 18, face = "bold.italic")) +
+    theme(legend.title = element_text(colour="grey20", size = 22, face = "bold")) + 
+    xlab("PC5 (RCE:0.02)") +
+    ylab("PC6 (RCE:0.01)") +
+    theme(axis.text.x  = element_text(size=20, angle = 90, vjust = 0.5)) +
+    theme(axis.text.y  = element_text(size=20)) +
+    ggtitle("PCoA (on  Bray-Curtis distances)\nof healthy infants") +
+    theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+  print(myPlot)
+  cat("\n")
+}
+```
+
+### Sick only
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+MyDendroSick <- hclust(sickBetaDivMap, method="ward.D")
+#Silhouette index maxes out at 6 clusters
+#plot(3:21,NbClust(diss=sickBetaDivMap, distance=NULL, method="ward.D", min.nc=3, max.nc=21, index="silhouette")$All.index)
+#Frey index maxes out at 15 clusters (huge outlier) (6 is also good, but not as good)
+#plot(3:21,NbClust(diss=sickBetaDivMap, distance=NULL, method="ward.D", min.nc=3, max.nc=21, index="frey")$All.index)
+
+#Should label 5/15 clusters for healthy infants only
+sickClusters6 <- cutree(MyDendroSick, k=6)
+sickClusters15 <- cutree(MyDendroSick, k=15)
+
+sickTopAnno <- HeatmapAnnotation(Symptoms=map$PrePostSympt[map$Sample %in% colnames(as.matrix(sickBetaDivMap))],
+                                 Age=map$Age[map$Sample %in% colnames(as.matrix(sickBetaDivMap))],
+                             #HIV_Exposure=map$HIVStatus[map$Sample %in% colnames(as.matrix(sickBetaDivMap))],
+                             Cluster=sickClusters6,
+                             MoreCluster=sickClusters15,
+                             col=list(Symptoms=c("Pre"="goldenrod","Post"="darkgreen","Healthy"="lightblue", "Active"="darkred"),
+                                      Age=col_fun,
+                                      #HIV_Exposure=c("Control"="blue","HIV"="red"),
+                                      Cluster=c("1"=col_vector[1],"2"=col_vector[2],"3"=col_vector[3],"4"=col_vector[4],"5"=col_vector[5],"6"=col_vector[6]),
+                                      MoreCluster=c("1"=col_vector[1],"2"=col_vector[2],"3"=col_vector[3],"4"=col_vector[4],"5"=col_vector[5],
+                            "6"=col_vector[6],"7"=col_vector[7],"8"=col_vector[8],"9"=col_vector[9],"10"=col_vector[10],
+                            "11"=col_vector[11],"12"=col_vector[12],"13"=col_vector[13],"14"=col_vector[14],"15"=col_vector[15])))
+Heatmap(as.matrix(sickBetaDivMap), top_annotation = sickTopAnno, show_row_names = FALSE,
+        show_column_names = FALSE, name = "Bray-Curtis", cluster_rows = MyDendroSick, cluster_columns = MyDendroSick)
+
+fullGenus$SC6 <- 0
+for(i in 1:6){
+  fullGenus$SC6[fullGenus$Sample %in% names(sickClusters6)[sickClusters6==i]] <- i
+}
+fullGenus$SC15 <- 0
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 1]] <- "1a"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 14]] <- "1b"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 15]] <- "1c"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 2]] <- "2"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 3]] <- "3"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 4]] <- "4a"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 8]] <- "4b"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 13]] <- "4c"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 5]] <- "5a"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 6]] <- "5b"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 11]] <- "5c"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 7]] <- "6a"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 9]] <- "6b"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 10]] <- "6c"
+fullGenus$SC15[fullGenus$Sample %in% names(sickClusters15)[sickClusters15 == 12]] <- "6d"
+```
+
+### All {.tabset}
+
+#### Heatmap
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+MyDendro <- hclust(BetaDivMap, method="ward.D")
+#plot(3:21,NbClust(diss=BetaDivMap, distance=NULL, method="ward.D", min.nc=3, max.nc=21, index="silhouette")$All.index)
+#plot(3:21,NbClust(diss=BetaDivMap, distance=NULL, method="ward.D", min.nc=3, max.nc=21, index="frey")$All.index)
+# NbClust(diss=BetaDivMap, distance=NULL, method="average", min.nc=5, max.nc=15, index="silhouette")
+# NbClust(diss=BetaDivMap, distance=NULL, method="average", min.nc=2, max.nc=15, index="frey")
+basicClusters <- cutree(MyDendro, k=6)
+basicClusters2 <- cutree(MyDendro, k=13)
+TopAnno <- HeatmapAnnotation(Symptoms=map$PrePostSympt[map$Sample %in% colnames(as.matrix(BetaDivMap))],
+                             Age=map$Age[map$Sample %in% colnames(as.matrix(BetaDivMap))],
+                             #HIV_Exposure=map$HIVStatus[map$Sample %in% colnames(as.matrix(BetaDivMap))],
+                             Cluster=basicClusters,
+                             MoreCluster=basicClusters2,
+                             col=list(Symptoms=c("Pre"="goldenrod","Post"="darkgreen","Healthy"="lightblue", "Active"="darkred"),
+                                      Age=col_fun,
+                                      #HIV_Exposure=c("Control"="blue","HIV"="red"),
+                                      Cluster=c("1"=col_vector[1],"2"=col_vector[2],"3"=col_vector[3],"4"=col_vector[4],"5"=col_vector[5],"6"=col_vector[6]),
+                                      MoreCluster=c("1"=col_vector[1],"2"=col_vector[2],"3"=col_vector[3],"4"=col_vector[4],"5"=col_vector[5],"6"=col_vector[6],"7"=col_vector[7],"8"=col_vector[8],"9"=col_vector[9],"10"=col_vector[10],
+                                                    "11"=col_vector[11],"12"=col_vector[12],
+                                                    "13"=col_vector[13])))
+Heatmap(as.matrix(BetaDivMap), top_annotation = TopAnno, show_row_names = FALSE,
+        show_column_names = FALSE, name = "Bray-Curtis", cluster_rows = MyDendro, cluster_columns = MyDendro)
+```
+
+#### PCoA {.tabset}
+
+##### Age
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+require(ape)
+myPCoA <- pcoa(BetaDivMap)
+plotAllPCoA <- data.frame(myPCoA$vectors[,1:6])
+colnames(plotAllPCoA) = c("PC_1","PC_2","PC_3","PC_4","PC_5","PC_6")
+plotAllPCoA$Subject <- factor(map[rownames(myPCoA$vectors),"Subject"])
+plotAllPCoA$Age <- map[rownames(myPCoA$vectors),"Age"]
+plotAllPCoA$LRTI <- map[rownames(myPCoA$vectors),"PrePostSympt"]
+# head(myPCoA$values)
+ggplot(plotAllPCoA, aes(x=PC_1, y=PC_2, fill=Age)) +
+  geom_point(size=5, shape=21, color="black") +
+  theme_linedraw() +
+  scale_fill_gradient2(name="Age",low="white",mid="yellow",high="black",midpoint=60) +
+  theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+  theme(legend.text = element_text(colour="grey35", size = 18, face = "bold.italic")) +
+  theme(legend.title = element_text(colour="grey20", size = 22, face = "bold")) + 
+  xlab("PC1 (RCE:0.05)") +
+  ylab("PC2 (RCE:0.04)") +
+  theme(axis.text.x  = element_text(size=20, angle = 90, vjust = 0.5)) +
+  theme(axis.text.y  = element_text(size=20)) +
+  ggtitle("PCoA (on  Bray-Curtis distances)\nof all infant samples") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+ggplot(plotAllPCoA, aes(x=PC_3, y=PC_4, fill=Age)) +
+  geom_point(size=5, shape=21, color="black") +
+  theme_linedraw() +
+  scale_fill_gradient2(name="Age",low="white",mid="yellow",high="black",midpoint=60) +
+  theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+  theme(legend.text = element_text(colour="grey35", size = 18, face = "bold.italic")) +
+  theme(legend.title = element_text(colour="grey20", size = 22, face = "bold")) + 
+  xlab("PC3 (RCE:0.03)") +
+  ylab("PC4 (RCE:0.02)") +
+  theme(axis.text.x  = element_text(size=20, angle = 90, vjust = 0.5)) +
+  theme(axis.text.y  = element_text(size=20)) +
+  ggtitle("PCoA (on  Bray-Curtis distances)\nof all infant samples") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+ggplot(plotAllPCoA, aes(x=PC_5, y=PC_6, fill=Age)) +
+  geom_point(size=5, shape=21, color="black") +
+  theme_linedraw() +
+  scale_fill_gradient2(name="Age",low="white",mid="yellow",high="black",midpoint=60) +
+  theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+  theme(legend.text = element_text(colour="grey35", size = 18, face = "bold.italic")) +
+  theme(legend.title = element_text(colour="grey20", size = 22, face = "bold")) + 
+  xlab("PC5 (RCE:0.02)") +
+  ylab("PC6 (RCE:0.01)") +
+  theme(axis.text.x  = element_text(size=20, angle = 90, vjust = 0.5)) +
+  theme(axis.text.y  = element_text(size=20)) +
+  ggtitle("PCoA (on  Bray-Curtis distances)\nof all infant samples") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+```
+
+##### LRTI status
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+ggplot(plotAllPCoA, aes(x=PC_1, y=PC_2, fill=factor(LRTI, levels=c("Healthy","Pre","Active","Post")))) +
+  geom_point(size=5, shape=21, color="black") +
+  theme_linedraw() +
+  scale_fill_manual(values=c("lightblue","goldenrod","darkred","darkgreen")) +
+  guides(fill = guide_legend(ncol = 1, bycol=TRUE, title="LRTI status")) + 
+  theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+  theme(legend.text = element_text(colour="grey35", size = 18, face = "bold.italic")) +
+  theme(legend.title = element_text(colour="grey20", size = 22, face = "bold")) + 
+  xlab("PC1 (RCE:0.05)") +
+  ylab("PC2 (RCE:0.04)") +
+  theme(axis.text.x  = element_text(size=20, angle = 90, vjust = 0.5)) +
+  theme(axis.text.y  = element_text(size=20)) +
+  ggtitle("PCoA (on  Bray-Curtis distances)\nof all infant samples") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+ggplot(plotAllPCoA, aes(x=PC_3, y=PC_4, fill=factor(LRTI, levels=c("Healthy","Pre","Active","Post")))) +
+  geom_point(size=5, shape=21, color="black") +
+  theme_linedraw() +
+  scale_fill_manual(values=c("lightblue","goldenrod","darkred","darkgreen")) +
+  guides(fill = guide_legend(ncol = 1, bycol=TRUE, title="LRTI status")) + 
+  theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+  theme(legend.text = element_text(colour="grey35", size = 18, face = "bold.italic")) +
+  theme(legend.title = element_text(colour="grey20", size = 22, face = "bold")) + 
+  xlab("PC3 (RCE:0.03)") +
+  ylab("PC4 (RCE:0.02)") +
+  theme(axis.text.x  = element_text(size=20, angle = 90, vjust = 0.5)) +
+  theme(axis.text.y  = element_text(size=20)) +
+  ggtitle("PCoA (on  Bray-Curtis distances)\nof all infant samples") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+ggplot(plotAllPCoA, aes(x=PC_5, y=PC_6, fill=factor(LRTI, levels=c("Healthy","Pre","Active","Post")))) +
+  geom_point(size=5, shape=21, color="black") +
+  theme_linedraw() +
+  scale_fill_manual(values=c("lightblue","goldenrod","darkred","darkgreen")) +
+  guides(fill = guide_legend(ncol = 1, bycol=TRUE, title="LRTI status")) + 
+  theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+  theme(legend.text = element_text(colour="grey35", size = 18, face = "bold.italic")) +
+  theme(legend.title = element_text(colour="grey20", size = 22, face = "bold")) + 
+  xlab("PC5 (RCE:0.02)") +
+  ylab("PC6 (RCE:0.01)") +
+  theme(axis.text.x  = element_text(size=20, angle = 90, vjust = 0.5)) +
+  theme(axis.text.y  = element_text(size=20)) +
+  ggtitle("PCoA (on  Bray-Curtis distances)\nof all infant samples") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results="asis"}
+for(taxon in c("Staphylococcus","Streptococcus","Moraxella","Dolosigranulum","Corynebacterium","Haemophilus","Anaerobacillus","Bacillus","Delftia")){
+  cat("\n#####", taxon, "\n")
+  plotAllPCoA[[taxon]] <- unlist(lapply(rownames(plotAllPCoA),function(x){CPMgenus[taxon,x]/10000}))
+  myPlot <- ggplot(plotAllPCoA, aes(x=PC_1, y=PC_2, fill=plotAllPCoA[[taxon]])) +
+    geom_point(size=5, shape=21, color="black") +
+    theme_linedraw() +
+    scale_fill_gradient2(name=taxon,low="white",mid=genCols[[taxon]],high="black",midpoint=max(plotAllPCoA[[taxon]])/2) +
+    theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+    theme(legend.text = element_text(colour="grey35", size = 18, face = "bold.italic")) +
+    theme(legend.title = element_text(colour="grey20", size = 22, face = "bold")) + 
+    xlab("PC1 (RCE:0.05)") +
+    ylab("PC2 (RCE:0.04)") +
+    theme(axis.text.x  = element_text(size=20, angle = 90, vjust = 0.5)) +
+    theme(axis.text.y  = element_text(size=20)) +
+    ggtitle("PCoA (on  Bray-Curtis distances)\nof all infant samples") +
+    theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+  print(myPlot)
+  myPlot <- ggplot(plotAllPCoA, aes(x=PC_3, y=PC_4, fill=plotAllPCoA[[taxon]])) +
+    geom_point(size=5, shape=21, color="black") +
+    theme_linedraw() +
+    scale_fill_gradient2(name=taxon,low="white",mid=genCols[[taxon]],high="black",midpoint=max(plotAllPCoA[[taxon]])/2) +
+    theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+    theme(legend.text = element_text(colour="grey35", size = 18, face = "bold.italic")) +
+    theme(legend.title = element_text(colour="grey20", size = 22, face = "bold")) + 
+    xlab("PC3 (RCE:0.03)") +
+    ylab("PC4 (RCE:0.02)") +
+    theme(axis.text.x  = element_text(size=20, angle = 90, vjust = 0.5)) +
+    theme(axis.text.y  = element_text(size=20)) +
+    ggtitle("PCoA (on  Bray-Curtis distances)\nof all infant samples") +
+    theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+  print(myPlot)
+  myPlot <- ggplot(plotAllPCoA, aes(x=PC_5, y=PC_6, fill=plotAllPCoA[[taxon]])) +
+    geom_point(size=5, shape=21, color="black") +
+    theme_linedraw() +
+    scale_fill_gradient2(name=taxon,low="white",mid=genCols[[taxon]],high="black",midpoint=max(plotAllPCoA[[taxon]])/2) +
+    theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+    theme(legend.text = element_text(colour="grey35", size = 18, face = "bold.italic")) +
+    theme(legend.title = element_text(colour="grey20", size = 22, face = "bold")) + 
+    xlab("PC5 (RCE:0.02)") +
+    ylab("PC6 (RCE:0.01)") +
+    theme(axis.text.x  = element_text(size=20, angle = 90, vjust = 0.5)) +
+    theme(axis.text.y  = element_text(size=20)) +
+    ggtitle("PCoA (on  Bray-Curtis distances)\nof all infant samples") +
+    theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+  print(myPlot)
+  cat("\n")
+}
+```
+
+## Cluster profiles {.tabset}
+
+### Healthy only {.tabset}
+
+#### Silhouette index
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#Plot with axis labels and color codes
+ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(healthyBetaDivMap)),], aes(x=Sample,y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other"))))) +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,28))]) +
+  geom_bar(stat="identity",position="fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_grid(~HC5,scales="free",space="free") +
+  ggtitle("Genus abundance by cluster\n(Healthy infants only)") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_blank(),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Samples (clustered by Bray-Curtis dissimilarity)", y="Percent relative abundance")
+
+#Plots for paper only - making the age color bar, etc.
+#ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(healthyBetaDivMap)),], aes(x=Sample,y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other"))))) +
+#   scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,28))]) +
+#   geom_bar(stat="identity",position="fill") +
+#   scale_y_continuous(labels = scales::percent_format()) +
+#   facet_grid(~HC5,scales="free",space="free") +
+#   ggtitle("Genus abundance by cluster\n(Healthy infants only)") +
+#   theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+#         axis.text.x=element_blank(),
+#         axis.text.y=element_blank(),
+#         axis.title.x=element_text(face="bold",size=14),
+#         axis.title.y=element_blank()) +
+#   labs(x="Samples (clustered by Bray-Curtis dissimilarity)") +
+#   theme(legend.position = "none")
+# 
+# ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(healthyBetaDivMap)),],
+#        aes(x=Sample,y=1,fill=Age)) +
+#   scale_fill_gradient2(name="Age",low="white",mid="yellow",high="black",midpoint=60) +
+#   geom_bar(stat="identity") +
+#   theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+#         axis.text.x=element_blank(),
+#         axis.text.y=element_blank(),
+#         axis.title.x=element_text(face="bold",size=14),
+#         axis.title.y=element_blank()) +
+#   facet_grid(~HC5,scales="free",space="free") +
+#   theme(legend.position = "none")
+```
+
+#### Frey index
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#Plot with axis labels and color codes
+ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(healthyBetaDivMap)),], aes(x=Sample,y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other"))))) +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,28))]) +
+  geom_bar(stat="identity",position="fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_grid(~HC15,scales="free",space="free") +
+  ggtitle("Genus abundance by cluster\n(Healthy infants only)") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_blank(),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Samples (clustered by Bray-Curtis dissimilarity)", y="Percent relative abundance")
+
+#Plots for paper only - making the age color bar, etc.
+# ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(healthyBetaDivMap)),], aes(x=Sample,y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other"))))) +
+#   scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,28))]) +
+#   geom_bar(stat="identity",position="fill") +
+#   scale_y_continuous(labels = scales::percent_format()) +
+#   facet_grid(~HC15,scales="free",space="free") +
+#   ggtitle("Genus abundance by cluster\n(Healthy infants only)") +
+#   theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+#         axis.text.x=element_blank(),
+#         axis.text.y=element_blank(),
+#         axis.title.x=element_text(face="bold",size=14),
+#         axis.title.y=element_blank()) +
+#   labs(x="Samples (clustered by Bray-Curtis dissimilarity)") +
+#   theme(legend.position = "none")
+# 
+# ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(healthyBetaDivMap)),],
+#        aes(x=Sample,y=1,fill=Age)) +
+#   scale_fill_gradient2(name="Age",low="white",mid="yellow",high="black",midpoint=60) +
+#   geom_bar(stat="identity") +
+#   theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+#         axis.text.x=element_blank(),
+#         axis.text.y=element_blank(),
+#         axis.title.x=element_text(face="bold",size=14),
+#         axis.title.y=element_blank()) +
+#   facet_grid(~HC15,scales="free",space="free") +
+#   theme(legend.position = "none")
+# ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(healthyBetaDivMap)),],
+#        aes(x=Sample,y=1,fill=factor(Subject))) +
+#   geom_bar(stat="identity") +
+#   theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+#         axis.text.x=element_blank(),
+#         axis.text.y=element_blank(),
+#         axis.title.x=element_text(face="bold",size=14),
+#         axis.title.y=element_blank()) +
+#   facet_grid(~HC15,scales="free",space="free") +
+#   theme(legend.position = "none")
+```
+
+### Sick only {.tabset}
+
+#### Silhouette index
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#Plot with axis labels and color codes
+ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(sickBetaDivMap)),], aes(x=Sample,y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other"))))) +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,28))]) +
+  geom_bar(stat="identity",position="fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_grid(~SC6,scales="free",space="free") +
+  ggtitle("Genus abundance by cluster\n(LRTI infants only)") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_blank(),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Samples (clustered by Bray-Curtis dissimilarity)", y="Percent relative abundance")
+
+# #Plots for paper only - making the age color bar, etc.
+# ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(sickBetaDivMap)),], aes(x=Sample,y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other"))))) +
+#   scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,28))]) +
+#   geom_bar(stat="identity",position="fill") +
+#   scale_y_continuous(labels = scales::percent_format()) +
+#   facet_grid(~SC6,scales="free",space="free") +
+#   ggtitle("Genus abundance by cluster\n(LRTI infants only)") +
+#   theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+#         axis.text.x=element_blank(),
+#         axis.text.y=element_blank(),
+#         axis.title.x=element_text(face="bold",size=14),
+#         axis.title.y=element_blank()) +
+#   labs(x="Samples (clustered by Bray-Curtis dissimilarity)") +
+#   theme(legend.position = "none")
+# ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(sickBetaDivMap)),],
+#        aes(x=Sample,y=1,fill=Age)) +
+#   scale_fill_gradient2(name="Age",low="white",mid="yellow",high="black",midpoint=60) +
+#   geom_bar(stat="identity") +
+#   theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+#         axis.text.x=element_blank(),
+#         axis.text.y=element_blank(),
+#         axis.title.x=element_text(face="bold",size=14),
+#         axis.title.y=element_blank()) +
+#   facet_grid(~SC6,scales="free",space="free") +
+#   theme(legend.position = "none")
+# ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(sickBetaDivMap)),],
+#        aes(x=Sample,y=1,fill=factor(PrePost,levels=c("Pre","Active","Post","Healthy")))) +
+#   geom_bar(stat="identity") +
+#   scale_fill_manual(name="Infection status",values=c("goldenrod","darkred","darkgreen","lightblue")) +
+#   theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+#         axis.text.x=element_blank(),
+#         axis.text.y=element_blank(),
+#         axis.title.x=element_text(face="bold",size=14),
+#         axis.title.y=element_blank()) +
+#   facet_grid(~SC6,scales="free",space="free") +
+#   theme(legend.position = "none")
+```
+
+#### Frey index
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#Plot with axis labels and color codes
+ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(sickBetaDivMap)),], aes(x=Sample,y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other"))))) +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,28))]) +
+  geom_bar(stat="identity",position="fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_grid(~SC15,scales="free",space="free") +
+  ggtitle("Genus abundance by cluster\n(LRTI infants only)") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_blank(),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Samples (clustered by Bray-Curtis dissimilarity)", y="Percent relative abundance")
+
+# #Plots for paper only - making the age color bar, etc.
+# ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(sickBetaDivMap)),], aes(x=Sample,y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other"))))) +
+#   scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,28))]) +
+#   geom_bar(stat="identity",position="fill") +
+#   scale_y_continuous(labels = scales::percent_format()) +
+#   facet_grid(~SC15,scales="free",space="free") +
+#   ggtitle("Genus abundance by cluster\n(LRTI infants only)") +
+#   theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+#         axis.text.x=element_blank(),
+#         axis.text.y=element_blank(),
+#         axis.title.x=element_text(face="bold",size=14),
+#         axis.title.y=element_blank()) +
+#   labs(x="Samples (clustered by Bray-Curtis dissimilarity)") +
+#   theme(legend.position = "none")
+# ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(sickBetaDivMap)),],
+#        aes(x=Sample,y=1,fill=Age)) +
+#   scale_fill_gradient2(name="Age",low="white",mid="yellow",high="black",midpoint=60) +
+#   geom_bar(stat="identity") +
+#   theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+#         axis.text.x=element_blank(),
+#         axis.text.y=element_blank(),
+#         axis.title.x=element_text(face="bold",size=14),
+#         axis.title.y=element_blank()) +
+#   facet_grid(~SC15,scales="free",space="free") +
+#   theme(legend.position = "none")
+# ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(sickBetaDivMap)),],
+#        aes(x=Sample,y=1,fill=factor(PrePost,levels=c("Pre","Active","Post","Healthy")))) +
+#   geom_bar(stat="identity") +
+#   scale_fill_manual(name="Infection status",values=c("goldenrod","darkred","darkgreen","lightblue")) +
+#   theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+#         axis.text.x=element_blank(),
+#         axis.text.y=element_blank(),
+#         axis.title.x=element_text(face="bold",size=14),
+#         axis.title.y=element_blank()) +
+#   facet_grid(~SC15,scales="free",space="free") +
+#   theme(legend.position = "none")
+```
+
+### All {.tabset}
+
+#### Silhouette index
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#Plot with axis labels and color codes
+clus6Names <- c("Mother","Haemophilus","Moraxella","Dolosigranulum","Anaerobac","Streptococcus","Staphylococcus")
+fullGenus$Clus6Names <- "NONE"
+for(i in 1:nrow(fullGenus)){
+  if(!is.na(fullGenus$Cluster6[i])){
+    fullGenus$Clus6Names[i] <- clus6Names[fullGenus$Cluster6[i]+1]
+  }
+}
+
+ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(BetaDivMap)),], aes(x=Sample,y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other"))))) +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,28))]) +
+  geom_bar(stat="identity",position="fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_grid(~factor(Clus6Names,levels=c("Staphylococcus","Dolosigranulum","Moraxella","Streptococcus","Haemophilus","Anaerobac")),scales="free",space="free") +
+  ggtitle("Genus abundance by cluster") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=64),
+        axis.text.x=element_blank(),
+        axis.title=element_text(face="bold",size=28),
+        strip.text.x = element_text(face="bold",size=16),
+        legend.position="none") +
+  labs(x="Samples (clustered by Bray-Curtis dissimilarity, Silhouette index cutoff)", y="Percent relative abundance")
+
+ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(BetaDivMap)),],
+       aes(x=Sample,y=1,fill=factor(PrePost,levels=c("Pre","Active","Post","Healthy")))) +
+  scale_fill_manual(name="Infection status",values=c("goldenrod","darkred","darkgreen","lightblue")) +
+  geom_bar(stat="identity") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.title.x=element_text(face="bold",size=14),
+        axis.title.y=element_blank()) +
+  facet_grid(~factor(Clus6Names,levels=c("Staphylococcus","Dolosigranulum","Moraxella","Streptococcus","Haemophilus","Anaerobac")),scales="free",space="free") +
+  theme(legend.position = "none")
+ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(BetaDivMap)),],
+       aes(x=Sample,y=1,fill=Age)) +
+  scale_fill_gradient2(name="Age",low="white",mid="yellow",high="black",midpoint=60) +
+  geom_bar(stat="identity") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.title.x=element_text(face="bold",size=14),
+        axis.title.y=element_blank()) +
+  facet_grid(~factor(Clus6Names,levels=c("Staphylococcus","Dolosigranulum","Moraxella","Streptococcus","Haemophilus","Anaerobac")),scales="free",space="free") +
+  theme(legend.position = "none")
+```
+
+#### Frey index
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+clus13Names <- c("Mother","Haemo A","Haemo B","Moraxella A", "Moraxella B",
+                 "Dolosigranulum","Anaerobac","Strep D", "Strep C",
+                 "Strep B", "Strep A", "Staph A",
+                 "Staph B", "Staph C")
+fullGenus$Clus13Names <- "NONE"
+for(i in 1:nrow(fullGenus)){
+  if(!is.na(fullGenus$Cluster13[i])){
+    fullGenus$Clus13Names[i] <- clus13Names[fullGenus$Cluster13[i]+1]
+  }
+}
+
+#Plot with axis labels and color codes
+ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(BetaDivMap)),], aes(x=Sample,y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other"))))) +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,28))]) +
+  geom_bar(stat="identity",position="fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  facet_grid(~factor(Clus13Names,levels=c("Staph A",
+                 "Staph B", "Staph C", "Dolosigranulum",
+                 "Moraxella A", "Moraxella B", "Strep A",
+                 "Strep B", "Strep C", "Strep D",
+                 "Haemo A","Haemo B", "Anaerobac")),scales="free",space="free") +
+  ggtitle("Genus abundance by cluster") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=64),
+        axis.text.x=element_blank(),
+        axis.title=element_text(face="bold",size=28),
+        strip.text.x = element_text(face="bold",size=16),
+        legend.position="none") +
+  labs(x="Samples (clustered by Bray-Curtis dissimilarity, Frey index cutoff)", y="Percent relative abundance")
+
+ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(BetaDivMap)),],
+       aes(x=Sample,y=1,fill=factor(PrePost,levels=c("Pre","Active","Post","Healthy")))) +
+  scale_fill_manual(name="Infection status",values=c("goldenrod","darkred","darkgreen","lightblue")) +
+  geom_bar(stat="identity") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.title.x=element_text(face="bold",size=14),
+        axis.title.y=element_blank()) +
+  facet_grid(~factor(Clus13Names,levels=c("Staph A",
+                 "Staph B", "Staph C", "Dolosigranulum",
+                 "Moraxella A", "Moraxella B", "Strep A",
+                 "Strep B", "Strep C", "Strep D",
+                 "Haemo A","Haemo B", "Anaerobac")),scales="free",space="free") +
+  theme(legend.position = "none")
+ggplot(fullGenus[fullGenus$Sample %in% colnames(as.matrix(BetaDivMap)),],
+       aes(x=Sample,y=1,fill=Age)) +
+  scale_fill_gradient2(name="Age",low="white",mid="yellow",high="black",midpoint=60) +
+  geom_bar(stat="identity") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.title.x=element_text(face="bold",size=14),
+        axis.title.y=element_blank()) +
+  facet_grid(~factor(Clus13Names,levels=c("Staph A",
+                 "Staph B", "Staph C", "Dolosigranulum",
+                 "Moraxella A", "Moraxella B", "Strep A",
+                 "Strep B", "Strep C", "Strep D",
+                 "Haemo A","Haemo B", "Anaerobac")),scales="free",space="free") +
+  theme(legend.position = "none")
+```
+
+
+## Fisher's Exact tests
+
+```{r,message=FALSE,error=FALSE}
+clusterResults <- data.frame(Healthy=c(0),Sick=c(0),Pval=c(1),oddsRat=c(1),minOdds=c(1),maxOdds=c(1))
+
+allCluster1 <- data.frame(Healthy=c(30,167),LRTI=c(10,55))
+rownames(allCluster1) <- c("In","Out")
+tmp <- fisher.test(allCluster1)
+clusterResults <- rbind(clusterResults, c(allCluster1[1,1],allCluster1[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allCluster2 <- data.frame(Healthy=c(31,166),LRTI=c(7,58))
+rownames(allCluster2) <- c("In","Out")
+tmp <- fisher.test(allCluster2)
+clusterResults <- rbind(clusterResults, c(allCluster2[1,1],allCluster2[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allCluster3 <- data.frame(Healthy=c(30,167),LRTI=c(5,60))
+rownames(allCluster3) <- c("In","Out")
+tmp <- fisher.test(allCluster3)
+clusterResults <- rbind(clusterResults, c(allCluster3[1,1],allCluster3[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allCluster4 <- data.frame(Healthy=c(6,191),LRTI=c(10,55))
+rownames(allCluster4) <- c("In","Out")
+tmp <- fisher.test(allCluster4)
+clusterResults <- rbind(clusterResults, c(allCluster4[1,1],allCluster4[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allCluster5 <- data.frame(Healthy=c(53,144),LRTI=c(12,53))
+rownames(allCluster5) <- c("In","Out")
+tmp <- fisher.test(allCluster5)
+clusterResults <- rbind(clusterResults, c(allCluster5[1,1],allCluster5[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allCluster6 <- data.frame(Healthy=c(47,150),LRTI=c(21,44))
+rownames(allCluster6) <- c("In","Out")
+tmp <- fisher.test(allCluster6)
+clusterResults <- rbind(clusterResults, c(allCluster6[1,1],allCluster6[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+
+clusterResults
+
+allSubs1 <- data.frame(Healthy=c(19,178),LRTI=c(8,57))
+tmp <- fisher.test(allSubs1)
+clusterResults <- rbind(clusterResults, c(allSubs1[1,1],allSubs1[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allSubs2 <- data.frame(Healthy=c(14,183),LRTI=c(5,60))
+tmp <- fisher.test(allSubs2)
+clusterResults <- rbind(clusterResults, c(allSubs2[1,1],allSubs2[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allSubs3 <- data.frame(Healthy=c(30,167),LRTI=c(5,60))
+tmp <- fisher.test(allSubs3)
+clusterResults <- rbind(clusterResults, c(allSubs3[1,1],allSubs3[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allSubs4 <- data.frame(Healthy=c(6,191),LRTI=c(10,55))
+tmp <- fisher.test(allSubs4)
+clusterResults <- rbind(clusterResults, c(allSubs4[1,1],allSubs4[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allSubs5 <- data.frame(Healthy=c(26,171),LRTI=c(5,60))
+tmp <- fisher.test(allSubs5)
+clusterResults <- rbind(clusterResults, c(allSubs5[1,1],allSubs5[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allSubs6 <- data.frame(Healthy=c(11,186),LRTI=c(2,63))
+tmp <- fisher.test(allSubs6)
+clusterResults <- rbind(clusterResults, c(allSubs6[1,1],allSubs6[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allSubs7 <- data.frame(Healthy=c(17,180),LRTI=c(2,63))
+tmp <- fisher.test(allSubs7)
+clusterResults <- rbind(clusterResults, c(allSubs7[1,1],allSubs7[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allSubs8 <- data.frame(Healthy=c(23,174),LRTI=c(15,50))
+tmp <- fisher.test(allSubs8)
+clusterResults <- rbind(clusterResults, c(allSubs8[1,1],allSubs8[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allSubs9 <- data.frame(Healthy=c(8,189),LRTI=c(4,61))
+tmp <- fisher.test(allSubs9)
+clusterResults <- rbind(clusterResults, c(allSubs9[1,1],allSubs9[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allSubs10 <- data.frame(Healthy=c(10,187),LRTI=c(1,64))
+tmp <- fisher.test(allSubs10)
+clusterResults <- rbind(clusterResults, c(allSubs10[1,1],allSubs10[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allSubs11 <- data.frame(Healthy=c(9,188),LRTI=c(3,62))
+tmp <- fisher.test(allSubs11)
+clusterResults <- rbind(clusterResults, c(allSubs11[1,1],allSubs11[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allSubs12 <- data.frame(Healthy=c(10,187),LRTI=c(0,65))
+tmp <- fisher.test(allSubs12)
+clusterResults <- rbind(clusterResults, c(allSubs12[1,1],allSubs12[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+allSubs13 <- data.frame(Healthy=c(14,183),LRTI=c(5,60))
+tmp <- fisher.test(allSubs13)
+clusterResults <- rbind(clusterResults, c(allSubs13[1,1],allSubs13[1,2],tmp$p.value,tmp$estimate,tmp$conf.int[1],tmp$conf.int[2]))
+
+rownames(clusterResults) <- c("test","1","2","3","4","5","6","1b","2b","3b","4b","5b","6b","7b","8b","9b","10b","11b","12b","13b")
+clusterResults
+
+ageAnovaData <- fullGenus[fullGenus$Age < 1000 & fullGenus$Genus=="Dolosigranulum",c("Sample","Age","InfectionStatus","Cluster6","Cluster13")]
+ageAnovaData$Cluster6 <- as.factor(ageAnovaData$Cluster6)
+ageAnovaData$Cluster13 <- as.factor(ageAnovaData$Cluster13)
+require(multcompView)
+clus6Anova <- aov(lm(Age~Cluster6,ageAnovaData))
+clus13Anova <- aov(lm(Age~Cluster13,ageAnovaData))
+TUKEY6 <- TukeyHSD(x=clus6Anova, conf.level=0.95)
+TUKEY13 <- TukeyHSD(x=clus13Anova, conf.level=0.95)
+TUKEY6
+TUKEY13
+hou
+```
+
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# healthyInfants <- unique(fullGenus$Subject[fullGenus$Sample %in% colnames(as.matrix(healthyBetaDivMap))])
+# plot(c(rep(0,15),fullGenus$Age[fullGenus$Subject==healthyInfants[1] &fullGenus$Genus=="Dolosigranulum"][order(fullGenus$Age[fullGenus$Subject==healthyInfants[1] &fullGenus$Genus=="Dolosigranulum"])]),factor(c("1a","1b","1c","1d","2","3a","3b","3c","3d","4a","4b","4c","5a","5b","5c",fullGenus$HC15[fullGenus$Subject==healthyInfants[1] &fullGenus$Genus=="Dolosigranulum"][order(fullGenus$Age[fullGenus$Subject==healthyInfants[1] &fullGenus$Genus=="Dolosigranulum"])]),levels=c("1a","1b","1c","1d","2","3a","3b","3c","3d","4a","4b","4c","5a","5b","5c")),type="l",ylab="Cluster",xlab="Age")
+# for(i in 2:30){
+#   lines(c(fullGenus$Age[fullGenus$Subject==healthyInfants[i] &fullGenus$Genus=="Dolosigranulum"][order(fullGenus$Age[fullGenus$Subject==healthyInfants[i] &fullGenus$Genus=="Dolosigranulum"])]),factor(c(fullGenus$HC15[fullGenus$Subject==healthyInfants[1] &fullGenus$Genus=="Dolosigranulum"][order(fullGenus$Age[fullGenus$Subject==healthyInfants[i] &fullGenus$Genus=="Dolosigranulum"])]),levels=c("1a","1b","1c","1d","2","3a","3b","3c","3d","4a","4b","4c","5a","5b","5c")),type="l",ylab="Cluster",xlab="Age")
+# }
+# 
+# testTable <- matrix(nrow=30,ncol=11)
+# for(i in 1:30){
+#   for(age in 1:11){
+#     testTable[i,age] <- fullGenus$HC15[fullGenus$Subject==healthyInfants[i] & fullGenus$Age < (age*10+2) & fullGenus$Age >= age*10-8 & fullGenus$Genus=="Dolosigranulum"][1]
+#   }
+# }
+# 
+# i <- 5
+# fullGenus[fullGenus$Genus=="Dolosigranulum" & fullGenus$Subject==healthyInfants[i],c("Age","HC5","HC15","Cluster6","Cluster13")][order(fullGenus$Age[fullGenus$Genus=="Dolosigranulum" & fullGenus$Subject==healthyInfants[i]],decreasing=FALSE),]
+# 
+# 3c -> 4a -> 1b -> 5c -> 5a ->1a
+# 3c -> 1d -> 2 -> 4a -> 1d -> 4c
+# 5c -> 5a -> 5c -> 1c -> 3a
+# 3b -> 2 -> 1b -> 2 -> 2 -> 4a -> 2
+# 3d -> 5b -> 2 -> 2 -> 4a -> 5b -> 5c
+# 
+# tempLists <- list()
+# for(i in 1:30){
+#   tempLists[[healthyInfants[i]]] <- fullGenus$HC15[fullGenus$Genus=="Dolosigranulum" & fullGenus$Subject==healthyInfants[i]][order(fullGenus$Age[fullGenus$Genus=="Dolosigranulum" & fullGenus$Subject==healthyInfants[i]],decreasing=FALSE)]
+# }
+
+```
+
+

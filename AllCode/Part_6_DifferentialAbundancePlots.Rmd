@@ -1,0 +1,208 @@
+---
+title: "Part 6: Differential Abundance Boxplots"
+author: "Tyler Faits"
+date: "6/11/2020"
+output:
+    html_document:
+      toc: true
+      toc_depth: 2
+      number_sections: true
+      code_folding: hide
+---
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+setwd("/Users/labadmin2/Documents/infant_gill/ProperLabels")
+require(ggplot2)
+require(ComplexHeatmap)
+require(reshape2)
+library(RColorBrewer)
+require(DESeq2)
+require(gridExtra)
+require(Rmisc)
+require(vegan)
+require(circlize)
+require(hclust)
+require(NbClust)
+#Create color palette to be used for plotting
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+#Load the count matrixes for phylum, genus, and species
+phyla <- readRDS("RefSeq2_p.RDS")
+genus <- readRDS("RefSeq2_g.RDS")
+species <- readRDS("RefSeq2_s.RDS")
+
+#delta/epsilon subdivisions is a part of Proteobacteria, so we're going with that.
+phyla["Proteobacteria",] <- phyla["Proteobacteria",] + phyla["delta/epsilon subdivisions",]
+phyla <- phyla[rownames(phyla) != "delta/epsilon subdivisions",]
+#Require more than 1000 reads in a sample to be analyzed
+phyla <- phyla[,apply(phyla,2,sum)>10000]
+phyla <- phyla[apply(phyla,1,sum) > 10,]
+genus <- genus[,apply(genus,2,sum)>10000]
+genus <- genus[apply(genus,1,sum) > 10,]
+species <- species[,apply(species,2,sum)>10000]
+species <- species[apply(species,1,sum) > 10,]
+colnames(genus) <- gsub("S|S0","X",colnames(genus))
+colnames(phyla) <- gsub("S|S0","X",colnames(phyla))
+colnames(species) <- gsub("S|S0","X",colnames(species))
+colnames(genus)[grep("DNA",colnames(genus))] <- c("DNA1","DNA2","DNA3","DNA4","DNA5")
+colnames(phyla)[grep("DNA",colnames(phyla))] <- c("DNA1","DNA2","DNA3","DNA4","DNA5")
+colnames(species)[grep("DNA",colnames(species))] <- c("DNA1","DNA2","DNA3","DNA4","DNA5")
+#Create a counts-per-million matrix for each taxonomic level
+CPMphyla <- t(t(phyla)/apply(phyla,2,sum)*1000000)
+CPMgenus <- t(t(genus)/apply(genus,2,sum)*1000000)
+CPMspecies <- t(t(species)/apply(species,2,sum)*1000000)
+CPMggPhyla <- readRDS("CPMggPhyla.RDS")
+CPMggGenus <- readRDS("CPMggGenus.RDS")
+CPMggSpecies <- readRDS("CPMggSpecies.RDS")
+map <- readRDS("../InfantMappingData2.RDS")
+map$PrePostSympt[is.na(map$PrePostSympt)] <- "none"
+map$PrePostSympt[map$PrePostSympt=="none"] <- "Healthy"
+map$PrePostSympt[map$Symptoms=="Yes" & !is.na(map$Symptoms)] <- "Active"
+fullGenus <- readRDS("fullGenusGGTable.RDS")
+CPMggGenus$logCPM <- log(CPMggGenus$Value*10000+1)
+CPMggGenus$timeToInfection <- NA
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="0884-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="0884-1"]-69
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="0719-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="0719-1"]-35
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="0955-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="0955-1"]-59
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="0218-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="0218-1"]-68
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="1035-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="1035-1"]-39
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="0631-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="0631-1"]-27
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="1087-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="1087-1"]-23
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="0071-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="0071-1"]-45
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="1145-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="1145-1"]-50
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="1097-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="1097-1"]-11
+
+ZScoresGen <- data.frame(Organism=c("Test"),TimeBin=c(7),Mean=c(5),SD=c(2),stringsAsFactors = FALSE)
+for(taxon in rownames(CPMgenus)){
+  for(TimeBin in 0:6){
+    ZScoresGen <- rbind(ZScoresGen, c(taxon,TimeBin,mean(log2(CPMgenus[taxon,map$Sample[!is.na(map$timepoint) & map$timepoint==TimeBin & map$InfectionStatus=="Healthy"]]+0.1)),sd(log2(CPMgenus[taxon,map$Sample[!is.na(map$timepoint) & map$timepoint==TimeBin & map$InfectionStatus=="Healthy"]]+0.1))+0.1))
+  }
+}
+ZScoresGen <- ZScoresGen[-1,]
+
+ZScoresGen$TimeBin <- as.numeric(ZScoresGen$TimeBin)
+ZScoresGen$Mean <- as.numeric(ZScoresGen$Mean)
+ZScoresGen$SD <- as.numeric(ZScoresGen$SD)
+
+genZmat <- CPMgenus[,map$Sample[map$Age < 1000]]
+for(sampName in colnames(genZmat)){
+  tmpZ <- ZScoresGen[ZScoresGen$TimeBin == map$timepoint[map$Sample==sampName],]
+  genZmat[,sampName] <- (log2(CPMgenus[,sampName]+0.1)-tmpZ[,3])/tmpZ[,4]
+}
+
+CPMggGenus$Zscore <- NA
+for(sampName in colnames(genZmat)){
+  for(orgName in rownames(genZmat)){
+    CPMggGenus$Zscore[CPMggGenus$Sample==sampName & CPMggGenus$Genus==orgName] <- genZmat[orgName,sampName]
+  }
+}
+```
+
+## First timepoints {.tabset}
+
+```{r, message=FALSE, results="asis"}
+cat("\n### Dolosigranulum \n")
+myPlot <- ggplot(CPMggGenus[CPMggGenus$Genus=="Dolosigranulum" & CPMggGenus$Age < 1000 & CPMggGenus$TimeBin==0,],
+                   aes(x=factor(InfectionStatus,levels=c("Healthy","RespiratoryIllness")), y=logCPM,
+                       fill=factor(InfectionStatus,levels=c("Healthy","RespiratoryIllness")))) +
+    stat_boxplot(geom ='errorbar',width = 0.3, size=1) +
+    theme(axis.line=element_line(color="black",size=0.5)) +
+    geom_boxplot(lwd=1, color="#000000") +
+    geom_dotplot(binaxis='y', stackdir='center', dotsize=1) +
+    scale_fill_manual(values=c("lightblue","darkred")) +
+    guides(fill = guide_legend(ncol = 1,bycol=TRUE,title="LRTI status")) + 
+    theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+    xlab("LRTI status") +
+    ylab("log(CPM)") +
+    theme(axis.text.x  = element_text(size=14, face="bold", angle = 0, hjust = 0.5)) +
+    theme(axis.text.y  = element_text(size=14)) +
+    scale_y_continuous(expand = c(0, 0), limits=c(0,16)) +
+    theme(legend.position = "none") +
+    theme(panel.background = element_rect(fill="gray95")) +
+    ggtitle(paste("Dolosigranulum","relative abundance")) +
+    theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+print(myPlot)
+for(taxon in c("Dolosigranulum","Anaerobacillus","Bacillus","Delftia")){
+  cat(paste("\n###", taxon, "\n"))
+  myPlot <- ggplot(CPMggGenus[CPMggGenus$Genus==taxon & CPMggGenus$Age < 1000 & CPMggGenus$TimeBin==0,],
+                   aes(x=factor(InfectionStatus,levels=c("Healthy","RespiratoryIllness")), y=Value,
+                       fill=factor(InfectionStatus,levels=c("Healthy","RespiratoryIllness")))) +
+    stat_boxplot(geom ='errorbar',width = 0.3, size=1) +
+    theme(axis.line=element_line(color="black",size=0.5)) +
+    geom_boxplot(lwd=1, color="#000000") +
+    geom_dotplot(binaxis='y', stackdir='center', dotsize=1) +
+    scale_fill_manual(values=c("lightblue","darkred")) +
+    guides(fill = guide_legend(ncol = 1,bycol=TRUE,title="LRTI status")) + 
+    theme(axis.title = element_text(face="bold", colour="#000000", size=18)) +
+    xlab("LRTI status") +
+    ylab("% relative abundance") +
+    theme(axis.text.x  = element_text(size=14, face="bold", angle = 0, hjust = 0.5)) +
+    theme(axis.text.y  = element_text(size=14)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    theme(legend.position = "none") +
+    theme(panel.background = element_rect(fill="gray95")) +
+    ggtitle(paste(taxon,"relative abundance")) +
+    theme(plot.title = element_text(hjust = 0.5,face="bold",size=20))
+  print(myPlot)
+  cat("\n")
+}
+
+plotZscores <- function(taxon){
+  plot(CPMggGenus$timeToInfection[!is.na(CPMggGenus$timeToInfection) & CPMggGenus$Genus==taxon],CPMggGenus$Zscore[!is.na(CPMggGenus$timeToInfection) & CPMggGenus$Genus==taxon])
+}
+plotAllZscores <- function(taxon){
+  boxplot(CPMggGenus$Zscore[CPMggGenus$Genus==taxon & CPMggGenus$InfectionStatus=="Healthy" & !is.na(CPMggGenus$Zscore)],
+          CPMggGenus$Zscore[CPMggGenus$Genus==taxon & CPMggGenus$InfectionStatus=="RespiratoryIllness" & !is.na(CPMggGenus$Zscore) & CPMggGenus$timeToInfection<0],
+          CPMggGenus$Zscore[CPMggGenus$Genus==taxon & CPMggGenus$InfectionStatus=="RespiratoryIllness" & !is.na(CPMggGenus$Zscore) & CPMggGenus$timeToInfection==0],
+          CPMggGenus$Zscore[CPMggGenus$Genus==taxon & CPMggGenus$InfectionStatus=="RespiratoryIllness" & !is.na(CPMggGenus$Zscore) & CPMggGenus$timeToInfection>0],
+          names=c("Healthy","Pre","Active","Post"), main=taxon)
+}
+```
+
+## Z-scores {.tabset}
+
+### Very early {.tabset}
+
+```{r, message=FALSE, results="asis"}
+#Very early differential abundance
+runTtest <- function(inTable){
+  tmp <- t.test(inTable$Zscore[inTable$InfectionStatus=="Healthy"],inTable$Zscore[inTable$InfectionStatus=="RespiratoryIllness"])
+  tmp <- t.test(inTable$Zscore[inTable$InfectionStatus=="RespiratoryIllness"])
+  return(c(tmp$p.value,tmp$conf.int[1:2]))
+}
+
+#Figure out which taxa to actually test
+acceptableTaxa <- c("Streptococcus","Dolosigranulum","Moraxella","Staphylococcus","Corynebacterium","Paracoccus","Acinetobacter","Bacillus","Anaerobacillus","Pseudomonas","Delftia","Aeromonas","Haemophilus","Kocuria","Ochrobactrum","Escherichia","Enterobacter","Klebsiella","Novosphingobium","Janibacter","Brachybacterium","Agrobacterium","Veillonella","Cutibacterium","Stenotrophomonas","Halolactibacillus","Proteus","Nocardioides","Variovorax","Marmoricola","Blastococcus","Knoellia","Anaerococcus")
+
+zSigimmediate <- data.frame(Genus=c("Test"),pValue=c(1),LowerConf=c(1),UpperConf=c(1),stringsAsFactors = FALSE)
+for(taxon in acceptableTaxa){
+  zSigimmediate <- rbind(zSigimmediate, c(taxon,runTtest(CPMggGenus[CPMggGenus$Genus==taxon & CPMggGenus$Age < 1000 & (CPMggGenus$InfectionStatus=="Healthy" | (!is.na(CPMggGenus$timeToInfection) & CPMggGenus$timeToInfection < 0 & CPMggGenus$timeToInfection > -11)),])))
+}
+zSigimmediate <- zSigimmediate[-1,]
+zSigimmediate$pAdjust <- p.adjust(zSigimmediate$pValue, method="fdr")
+
+zSigsearly <- data.frame(Genus=c("Test"),pValue=c(1),LowerConf=c(1),UpperConf=c(1),stringsAsFactors = FALSE)
+for(taxon in acceptableTaxa){
+  zSigsearly <- rbind(zSigsearly, c(taxon,runTtest(CPMggGenus[CPMggGenus$Genus==taxon & CPMggGenus$Age < 1000 & (CPMggGenus$InfectionStatus=="Healthy" | (!is.na(CPMggGenus$timeToInfection) & CPMggGenus$timeToInfection < -10 & CPMggGenus$timeToInfection > -21)),])))
+}
+zSigsearly <- zSigsearly[-1,]
+zSigsearly$pAdjust <- p.adjust(zSigsearly$pValue, method="fdr")
+
+zSigsVeryearly <- data.frame(Genus=c("Test"),pValue=c(1),LowerConf=c(1),UpperConf=c(1),stringsAsFactors = FALSE)
+for(taxon in acceptableTaxa){
+  zSigsVeryearly <- rbind(zSigsVeryearly, c(taxon,runTtest(CPMggGenus[CPMggGenus$Genus==taxon & CPMggGenus$Age < 1000 & (CPMggGenus$InfectionStatus=="Healthy" | (!is.na(CPMggGenus$timeToInfection) & CPMggGenus$timeToInfection < -20)),])))
+}
+zSigsVeryearly <- zSigsVeryearly[-1,]
+zSigsVeryearly$pAdjust <- p.adjust(zSigsVeryearly$pValue, method="fdr")
+
+zSigsAllPrior <- data.frame(Genus=c("Test"),pValue=c(1),LowerConf=c(1),UpperConf=c(1),stringsAsFactors = FALSE)
+for(taxon in acceptableTaxa){
+  zSigsAllPrior <- rbind(zSigsAllPrior, c(taxon,runTtest(CPMggGenus[CPMggGenus$Genus==taxon & CPMggGenus$Age < 1000 & (CPMggGenus$InfectionStatus=="Healthy" | (!is.na(CPMggGenus$timeToInfection) & CPMggGenus$timeToInfection < 0)),])))
+}
+zSigsAllPrior <- zSigsAllPrior[-1,]
+zSigsAllPrior$pAdjust <- p.adjust(zSigsAllPrior$pValue, method="fdr")
+
+
+for(taxon in c("Dolosigranulum","Anaerobacillus","Bacillus","Delftia")){
+  cat(paste("\n###", taxon, "\n"))

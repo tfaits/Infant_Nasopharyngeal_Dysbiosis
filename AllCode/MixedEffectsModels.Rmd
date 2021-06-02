@@ -1,0 +1,164 @@
+---
+title: "ME model"
+author: "Tyler Faits"
+date: "4/16/2020"
+output:
+    html_document:
+      toc: true
+      toc_depth: 2
+      number_sections: true
+      code_folding: hide
+---
+
+
+Load in the data
+
+```{r setup, include=FALSE}
+setwd("/Users/labadmin2/Documents/infant_gill/ProperLabels")
+require(ggplot2)
+require(ComplexHeatmap)
+require(reshape2)
+library(RColorBrewer)
+require(DESeq2)
+require(gridExtra)
+require(Rmisc)
+require(vegan)
+require(fossil)
+require(circlize)
+require(knitr)
+require(lme4)
+require(car)
+phyla <- readRDS("phyla.RDS")
+genus <- readRDS("genus.RDS")
+species <- readRDS("species.RDS")
+CPMggPhyla <- readRDS("CPMggPhyla.RDS")
+CPMggGenus <- readRDS("CPMggGenus.RDS")
+CPMggSpecies <- readRDS("CPMggSpecies.RDS")
+CPMphyla <- readRDS("CPMphyla.RDS")
+CPMgenus <- readRDS("CPMgenus.RDS")
+CPMspecies <- readRDS("CPMspecies.RDS")
+map <- readRDS("map.RDS")
+#Create color palette to be used for plotting
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+sickInfants <- unique(map$Subject[map$MothChild=="Infant" & map$InfectionStatus=="RespiratoryIllness"])
+
+#Select just the infants with known ages
+map <- map[map$Age < 1000,]
+genus <- genus[,map$Sample]
+phyla <- phyla[,map$Sample]
+species <- species[,map$Sample]
+CPMgenus <- CPMgenus[,map$Sample]
+CPMphyla <- CPMphyla[,map$Sample]
+CPMspecies <- CPMspecies[,map$Sample]
+
+CPMgenus <- CPMgenus[apply(CPMgenus,1,sum)>0,]
+CPMspecies <- CPMspecies[apply(CPMspecies,1,sum)>0,]
+```
+
+Create/run the model
+```{r cars}
+# Model including both age and infection status as fixed effects, with subject as a random effect
+runMixedLM <- function(inTable, taxon){
+  inTable <- cbind(t(inTable),map[colnames(inTable),])
+  colnames(inTable)[colnames(inTable)==taxon] <- "taxon"
+  allTime <- lmer(taxon ~ Age + InfectionStatus + HIVStatus + (1|Subject), data=inTable)
+  return(allTime)
+}
+# Model without infection status (just age and then subject as random)
+runMixedLMb <- function(inTable, taxon){
+  inTable <- cbind(t(inTable),map[colnames(inTable),])
+  colnames(inTable)[colnames(inTable)==taxon] <- "taxon"
+  allTime <- lmer(taxon ~ Age + (1|Subject), data=inTable)
+  return(allTime)
+}
+# Model with age, infection status, *and the interaction between the two
+runMixedLMc <- function(inTable, taxon){
+  inTable <- cbind(t(inTable),map[colnames(inTable),])
+  colnames(inTable)[colnames(inTable)==taxon] <- "taxon"
+  allTime <- lmer(taxon ~ Age * InfectionStatus  + (1|Subject), data=inTable)
+  return(allTime)
+}
+
+MEMresults <- data.frame(taxon=c("Undefined"),modelOnePval=c(1),model3Infection=c(1),
+                         model3Age=c(1),model3AgeInfection=c(1),stringsAsFactors=FALSE)
+
+# The row index 1:260 is to exclude "undefined" and "Other_Low_Abundance" from analysis.
+for(organism in rownames(CPMgenus)[1:411][apply(CPMgenus[1:411,],1,mean)>10]){
+  myMEM <- runMixedLM(log(CPMgenus+1),organism)
+  myMEMc <- runMixedLMc(log(CPMgenus+1),organism)
+  MEMresults <- rbind(MEMresults,c(organism,Anova(myMEM)[2,3],Anova(myMEMc)[2,3],Anova(myMEMc)[1,3],Anova(myMEMc)[3,3]))
+}
+
+MEMresults$adjustedP <- p.adjust(as.numeric(MEMresults$modelOnePval),method="BH")
+MEMresults[MEMresults$adjustedP < 0.1,]
+```
+
+```{r,message=FALSE}
+tmp <- MEMresults[MEMresults$taxon %in% rownames(CPMgenus)[1:411][apply(CPMgenus[1:411,],1,mean)>1000],]
+tmp$modelOnePval <- as.numeric(tmp$modelOnePval)
+tmp$model3Infection <- as.numeric(tmp$model3Infection)
+tmp$model3Age <- as.numeric(tmp$model3Age)
+tmp$model3AgeInfection <- as.numeric(tmp$model3AgeInfection)
+tmp$adjustedP1 <- p.adjust(tmp$modelOnePval,method="BH")
+tmp$Adjustedmodel3Infection <- p.adjust(tmp$model3Infection,method="BH")
+tmp$Adjustedmodel3Age <- p.adjust(tmp$model3Age,method="BH")
+tmp$Adjustedmodel3AgeInfection <- p.adjust(tmp$model3AgeInfection,method="BH")
+tmp[tmp$adjustedP<0.1,]
+```
+
+
+```{r, message=FALSE}
+set.seed(314)
+#Diversity of the rarefied data; don't want to overestimate the high-counts samples
+shanHealth <- diversity(rrarefy(ceiling(t(species)),10000), index="shannon")
+chaoHealth <- apply(t(rrarefy(ceiling(t(species)),10000)), 2, chao1)
+obsHealth <- apply(t(rrarefy(ceiling(t(species)),10000)), 2, function(x){sum(x>0)})
+fullHealth <- data.frame(sampNames=c(names(shanHealth),names(chaoHealth),names(obsHealth)),diversity=c(shanHealth,chaoHealth,obsHealth),Index=c(rep("Shannon",length(shanHealth)),rep("Chao1",length(shanHealth)),rep("Observed",length(shanHealth))))
+fullHealth <- cbind(fullHealth, map[fullHealth$sampNames,])
+divSum <- summarySE(fullHealth[fullHealth$MothChild=="Infant" & fullHealth$InfectionStatus=="Healthy" & fullHealth$Age < 1000,], measurevar="diversity", groupvars=c("Index","timepoint"))
+
+ggplot(divSum[divSum$Index=="Shannon",], aes(x=timepoint, y=diversity, group=Index)) + 
+  geom_line(size=1.5, color="darkblue") +
+  geom_point() +
+  geom_errorbar(aes(ymin=diversity-sd, ymax=diversity+sd), width=1.2, size=0.9,color="darkblue") +
+  ggtitle("Diversity measures over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Shannon index") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+
+
+runAlphaMLM <- function(metric){
+  tmp <- fullHealth[fullHealth$Age < 1000 & fullHealth$InfectionStatus=="Healthy" & fullHealth$Index==metric,]
+  healthTime <- lmer(diversity ~ Age + HIVStatus + (1|Subject), data=tmp)
+  return(healthTime)
+}
+
+tmp <- runAlphaMLM("Shannon")
+Anova(tmp)
+tmp <- runAlphaMLM("Chao1")
+Anova(tmp)
+tmp <- runAlphaMLM("Observed")
+Anova(tmp)
+
+runAlphaMLMsick <- function(metric){
+  tmp <- fullHealth[fullHealth$Age < 1000 & fullHealth$InfectionStatus=="RespiratoryIllness" & fullHealth$Index==metric,]
+  healthTime <- lmer(diversity ~ Age + HIVStatus + (1|Subject), data=tmp)
+  return(healthTime)
+}
+tmp <- runAlphaMLMsick("Shannon")
+Anova(tmp)
+tmp <- runAlphaMLMsick("Chao1")
+Anova(tmp)
+
+#Check to see if pre/active/post symptoms matter
+#tmp <- fullHealth[fullHealth$Index=="Shannon" & fullHealth$Age<1000 & fullHealth$InfectionStatus=="RespiratoryIllness",]
+#tmp2 <- lmer(diversity ~ PrePostSympt + HIVStatus + (1|Subject), data=tmp)
+
+```
+
+
+
+
+

@@ -1,0 +1,120 @@
+---
+title: "Part 5: Alpha diversity"
+author: "Tyler Faits"
+date: "6/11/2020"
+output:
+    html_document:
+      toc: true
+      toc_depth: 2
+      number_sections: true
+      code_folding: hide
+---
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+setwd("/Users/labadmin2/Documents/infant_gill/ProperLabels")
+require(ggplot2)
+require(ComplexHeatmap)
+require(reshape2)
+library(RColorBrewer)
+require(DESeq2)
+require(gridExtra)
+require(Rmisc)
+require(vegan)
+require(circlize)
+require(hclust)
+require(NbClust)
+#Create color palette to be used for plotting
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+#Load the count matrixes for phylum, genus, and species
+phyla <- readRDS("RefSeq2_p.RDS")
+genus <- readRDS("RefSeq2_g.RDS")
+species <- readRDS("RefSeq2_s.RDS")
+
+#delta/epsilon subdivisions is a part of Proteobacteria, so we're going with that.
+phyla["Proteobacteria",] <- phyla["Proteobacteria",] + phyla["delta/epsilon subdivisions",]
+phyla <- phyla[rownames(phyla) != "delta/epsilon subdivisions",]
+#Require more than 1000 reads in a sample to be analyzed
+phyla <- phyla[,apply(phyla,2,sum)>10000]
+phyla <- phyla[apply(phyla,1,sum) > 10,]
+genus <- genus[,apply(genus,2,sum)>10000]
+genus <- genus[apply(genus,1,sum) > 10,]
+species <- species[,apply(species,2,sum)>10000]
+species <- species[apply(species,1,sum) > 10,]
+colnames(genus) <- gsub("S|S0","X",colnames(genus))
+colnames(phyla) <- gsub("S|S0","X",colnames(phyla))
+colnames(species) <- gsub("S|S0","X",colnames(species))
+colnames(genus)[grep("DNA",colnames(genus))] <- c("DNA1","DNA2","DNA3","DNA4","DNA5")
+colnames(phyla)[grep("DNA",colnames(phyla))] <- c("DNA1","DNA2","DNA3","DNA4","DNA5")
+colnames(species)[grep("DNA",colnames(species))] <- c("DNA1","DNA2","DNA3","DNA4","DNA5")
+#Create a counts-per-million matrix for each taxonomic level
+CPMphyla <- t(t(phyla)/apply(phyla,2,sum)*1000000)
+CPMgenus <- t(t(genus)/apply(genus,2,sum)*1000000)
+CPMspecies <- t(t(species)/apply(species,2,sum)*1000000)
+map <- readRDS("../InfantMappingData2.RDS")
+map$PrePostSympt[is.na(map$PrePostSympt)] <- "none"
+map$PrePostSympt[map$PrePostSympt=="none"] <- "Healthy"
+map$PrePostSympt[map$Symptoms=="Yes" & !is.na(map$Symptoms)] <- "Active"
+fullGenus <- readRDS("fullGenusGGTable.RDS")
+```
+
+### Diversity in healthy infants {.tabset}
+
+#### Shannon index
+
+```{r, message=FALSE}
+set.seed(314)
+#Diversity of the rarefied data; don't want to overestimate the high-counts samples
+shanHealth <- diversity(rrarefy(ceiling(t(species)),10000), index="shannon")
+chaoHealth <- apply(t(rrarefy(ceiling(t(species)),10000)), 2, chao1)
+obsHealth <- apply(t(rrarefy(ceiling(t(species)),10000)), 2, function(x){sum(x>0)})
+fullHealth <- data.frame(sampNames=c(names(shanHealth),names(chaoHealth),names(obsHealth)),diversity=c(shanHealth,chaoHealth,obsHealth),Index=c(rep("Shannon",length(shanHealth)),rep("Chao1",length(shanHealth)),rep("Observed",length(shanHealth))))
+fullHealth <- cbind(fullHealth, map[fullHealth$sampNames,])
+divSum <- summarySE(fullHealth[fullHealth$MothChild=="Infant" & fullHealth$InfectionStatus=="Healthy" & fullHealth$Age < 1000,], measurevar="diversity", groupvars=c("Index","timepoint"))
+
+ggplot(divSum[divSum$Index=="Shannon",], aes(x=timepoint, y=diversity, group=Index)) + 
+  geom_line(size=1.5, color="darkblue") +
+  geom_point() +
+  geom_errorbar(aes(ymin=diversity-sd, ymax=diversity+sd), width=1.2, size=0.9,color="darkblue") +
+  ggtitle("Diversity measures over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Shannon index") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+#### Chao1 index
+
+```{r, message=FALSE}
+ggplot(divSum[divSum$Index=="Chao1",], aes(x=timepoint, y=diversity, group=factor(Index,levels=c("Chao1")))) + 
+  geom_line(size=1.5, color="darkgreen") +
+  geom_point() +
+  geom_errorbar(aes(ymin=diversity-sd, ymax=diversity+sd), width=1.2,size=0.9, color="darkgreen") +
+  ggtitle("Diversity measures over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Chao1 index") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+### Diversity in LRTI infants {.tabset}
+
+#### Shannon
+
+```{r, message=FALSE}
+divSum <- summarySE(fullHealth[fullHealth$MothChild=="Infant" & fullHealth$InfectionStatus=="RespiratoryIllness" & fullHealth$Age < 1000,], measurevar="diversity", groupvars=c("Index","timepoint"))
+
+ggplot(divSum[divSum$Index=="Shannon",], aes(x=timepoint, y=diversity, group=Index)) + 
+  geom_line(size=1.5, color="darkblue") +
+  geom_point() +
+  geom_errorbar(aes(ymin=diversity-sd, ymax=diversity+sd), width=1.2, size=0.9,color="darkblue") +
+  ggtitle("Diversity measures over time\nin LRTI infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Shannon index") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+
+

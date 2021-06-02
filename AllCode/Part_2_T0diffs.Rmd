@@ -1,0 +1,164 @@
+---
+title: "Part 2: T0 differences"
+author: "Tyler Faits"
+date: "2/3/2020"
+output:
+    html_document:
+      toc: true
+      toc_depth: 2
+      number_sections: true
+      code_folding: hide
+---
+
+### First timepoint {.tabset}
+
+The first timepoint is special - all of the SRTI infants are still asymptomatic, and should have the normal newborn profile.
+To be confident in our results, I'll use both DESeq2 and limma, and take what pops out from both.
+
+#### DESeq tables
+
+```{r,message=FALSE, results="asis"}
+setwd("/Users/labadmin2/Documents/infant_gill/ProperLabels")
+require(ggplot2)
+require(ComplexHeatmap)
+require(reshape2)
+library(RColorBrewer)
+require(DESeq2)
+require(gridExtra)
+require(Rmisc)
+require(vegan)
+require(fossil)
+require(circlize)
+require(knitr)
+require(lme4)
+require(car)
+require(limma)
+phyla <- readRDS("phyla.RDS")
+genus <- readRDS("genus.RDS")
+species <- readRDS("species.RDS")
+CPMphyla <- t(t(phyla)/apply(phyla,2,sum))*1000000
+CPMgenus <- t(t(genus)/apply(genus,2,sum))*1000000
+CPMspecies <- t(t(species)/apply(species,2,sum))*1000000
+CPMggPhyla <- readRDS("CPMggPhyla.RDS")
+CPMggGenus <- readRDS("CPMggGenus.RDS")
+CPMggSpecies <- readRDS("CPMggSpecies.RDS")
+map <- readRDS("map.RDS")
+
+t1DEphy <- DESeqDataSetFromMatrix(countData = round(phyla[,map$Sample[map$timepoint == 0 & !is.na(map$timepoint)]]) + 1,
+               colData = map[map$Sample[map$timepoint == 0 & !is.na(map$timepoint)],],
+                               design = ~ HIVStatus + InfectionStatus)
+# t1DEphy <- DESeq(t1DEphy)
+#saveRDS(t1DEphy,"t1DEphy.RDS")
+t1DEphy <- readRDS("t1DEphy.RDS")
+t1Resphy <- results(t1DEphy)
+t1Resultphy <- as.matrix(t1Resphy[, c("baseMean","log2FoldChange","pvalue","padj")])
+t1Resultphy[is.na(t1Resultphy[,"padj"]),"padj"] <- 1
+t1Differencesphy <- t1Resultphy[t1Resultphy[,"baseMean"] > 5,]
+kable(t1Differencesphy)
+
+# t1DEgen <- DESeqDataSetFromMatrix(countData = round(genus[,map$Sample[map$timepoint == 0 & !is.na(map$timepoint)]]) + 1,
+#               colData = map[map$Sample[map$timepoint == 0 & !is.na(map$timepoint)],],
+#                               design = ~ HIVStatus + InfectionStatus)
+# t1DEgen <- DESeq(t1DEgen)
+#saveRDS(t1DEgen,"t1DEgen.RDS")
+t1DEgen <- readRDS("t1DEgen.RDS")
+t1Resgen <- results(t1DEgen)
+t1Resultgen <- as.matrix(t1Resgen[, c("baseMean","log2FoldChange","pvalue","padj")])
+t1Resultgen[is.na(t1Resultgen[,"padj"]),"padj"] <- 1
+t1Differencesgen <- t1Resultgen[t1Resultgen[,"padj"] < 0.1 & (t1Resultgen[,"baseMean"] > 1000 | t1Resultgen[,"baseMean"]*2^t1Resultgen[,"log2FoldChange"] > 1000),]
+kable(t1Differencesgen)
+
+# t1DEspec <- DESeqDataSetFromMatrix(countData = round(species[,map$Sample[map$timepoint == 0 & !is.na(map$timepoint)]]) + 1,
+#               colData = map[map$Sample[map$timepoint == 0 & !is.na(map$timepoint)],],
+#                               design = ~ HIVStatus + InfectionStatus)
+# t1DEspec <- DESeq(t1DEspec)
+# saveRDS(t1DEspec,"t1DEspec.RDS")
+t1DEspec <- readRDS("t1DEspec.RDS")
+t1Resspec <- results(t1DEspec)
+t1Resultspec <- as.matrix(t1Resspec[, c("baseMean","log2FoldChange","pvalue","padj")])
+t1Resultspec[is.na(t1Resultspec[,"padj"]),"padj"] <- 1
+t1Differencesspec <- t1Resultspec[t1Resultspec[,"padj"] < 0.1 & (t1Resultspec[,"baseMean"] > 1000 | t1Resultspec[,"baseMean"]*2^t1Resultspec[,"log2FoldChange"] > 1000),]
+kable(t1Differencesspec)
+```
+
+#### Limma tables
+
+```{r,message=FALSE}
+design <- model.matrix(~map$InfectionStatus[map$timepoint == 0 & !is.na(map$timepoint)]+map$HIVStatus[map$timepoint == 0 & !is.na(map$timepoint)])
+vphy <- voom(phyla[apply(CPMphyla[,map$Sample[map$timepoint == 0 & !is.na(map$timepoint)]],1,mean)>2,map$Sample[map$timepoint == 0 & !is.na(map$timepoint)]], design, plot=FALSE)
+vfitphy <- lmFit(vphy, design)
+efitphy <- eBayes(vfitphy)
+sickvhealthphy <- topTreat(efitphy,coef=2,n=Inf)
+hivvcontrolphy <- topTreat(efitphy, coef=3,n=Inf)
+
+vgen <- voom(genus[apply(CPMgenus[,map$Sample[map$timepoint == 0 & !is.na(map$timepoint)]],1,mean)>2,map$Sample[map$timepoint == 0 & !is.na(map$timepoint)]], design, plot=FALSE)
+vfitgen <- lmFit(vgen, design)
+efitgen <- eBayes(vfitgen)
+sickvhealthgen <- topTreat(efitgen,coef=2,n=Inf)
+hivvcontrolgen <- topTreat(efitgen, coef=3,n=Inf)
+
+vspec <- voom(species[,map$Sample[map$timepoint == 0 & !is.na(map$timepoint)]], design, plot=FALSE)
+vfitspec <- lmFit(vspec, design)
+efitspec <- eBayes(vfitspec)
+sickvhealthspec <- topTreat(efitspec,coef=2,n=Inf)
+hivvcontrolspec <- topTreat(efitspec, coef=3,n=Inf)
+```
+
+#### Boxplots (Phylum) {.tabset}
+
+```{r,message=FALSE, results="asis"}
+CPMggPhyla$logValue <- log(CPMggPhyla$Value + 1)
+for(sigPhylum in c("Bacteroidetes")){
+  cat("\n#####",sigPhylum,"\n")
+  myPlot <- ggplot(CPMggPhyla[CPMggPhyla$Phylum == sigPhylum & CPMggPhyla$TimeBin==0 & !is.na(CPMggPhyla$TimeBin),],aes(x=InfectionStatus, y=logValue, fill=factor(Phylum))) +
+  geom_boxplot() +
+  scale_fill_manual(name="Phylum",values="darkred") +
+  ggtitle("Phylum log(abundance) in sick vs healthy infants at T0") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Symptom status", y="log(cpm)")
+  print(myPlot)
+  cat("\n")
+}
+```
+
+#### Boxplots (Genus) {.tabset}
+
+```{r,message=FALSE, results="asis"}
+CPMggGenus$logValue <- log(CPMggGenus$Value + 1)
+bothSigGen <- rownames(t1Differencesgen)[rownames(t1Differencesgen) %in% rownames(sickvhealthgen)[sickvhealthgen$adj.P.Val <= 0.1]]
+#for(sigGenus in bothSigGen){
+for(sigGenus in rownames(t1Differencesgen)){
+  cat("\n#####",sigGenus,"\n")
+  myPlot <- ggplot(CPMggGenus[CPMggGenus$Genus == sigGenus & CPMggGenus$TimeBin==0 & !is.na(CPMggGenus$TimeBin),],aes(x=InfectionStatus, y=logValue, fill=factor(Genus))) +
+  geom_boxplot() +
+  scale_fill_manual(name="Genus",values="darkred") +
+  ggtitle(paste(sigGenus, "log(abundance) in sick vs healthy infants at T0")) +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Symptom status", y="log(cpm)")
+  print(myPlot)
+  cat("\n")
+}
+```
+
+#### Boxplots (Species) {.tabset}
+
+```{r,message=FALSE,results="asis"}
+CPMggSpecies$logValue <- log(CPMggSpecies$Value + 1)
+for(sigSpecies in rownames(t1Differencesspec)){
+  cat("\n#####",sigSpecies,"\n")
+  myPlot <- ggplot(CPMggSpecies[CPMggSpecies$Species == sigSpecies & CPMggSpecies$TimeBin==0 & !is.na(CPMggSpecies$TimeBin),],aes(x=InfectionStatus, y=logValue, fill=factor(Species))) +
+  geom_boxplot() +
+  scale_fill_manual(name="Species",values="darkred") +
+  ggtitle("Genus log(abundance) in sick vs healthy infants at T0") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Symptom status", y="log(cpm)")
+  print(myPlot)
+  cat("\n")
+}
+```

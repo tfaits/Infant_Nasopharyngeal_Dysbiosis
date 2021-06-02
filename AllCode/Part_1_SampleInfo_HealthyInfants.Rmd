@@ -1,0 +1,890 @@
+---
+title: "Part 1"
+author: "Tyler Faits"
+date: "1/17/2020"
+output:
+    html_document:
+      toc: true
+      toc_depth: 2
+      number_sections: true
+      code_folding: hide
+---
+
+```{r, message=FALSE}
+setwd("/Users/labadmin2/Documents/infant_gill/ProperLabels")
+require(ggplot2)
+require(ComplexHeatmap)
+require(reshape2)
+library(RColorBrewer)
+require(DESeq2)
+require(gridExtra)
+require(Rmisc)
+require(vegan)
+require(fossil)
+require(circlize)
+require(knitr)
+require(lme4)
+require(car)
+#require(distributions3)
+#require(hclust)
+#require(NbClust)
+
+#Create color palette to be used for plotting
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+
+#Load the count matrixes for phylum, genus, and species
+phyla <- readRDS("SpecNames_p.RDS")
+genus <- readRDS("SpecNames_g.RDS")
+species <- readRDS("SpecNames_s.RDS")
+map <- readRDS("InfantMappingData.RDS")
+map <- map[map$Sample != "X12770",]
+colnames(genus) <- gsub("S|S0","X",colnames(genus))
+colnames(phyla) <- gsub("S|S0","X",colnames(phyla))
+colnames(species) <- gsub("S|S0","X",colnames(species))
+#delta/epsilon subdivisions is a part of Proteobacteria, so we're going with that.
+phyla["Proteobacteria",] <- phyla["Proteobacteria",] + phyla["delta/epsilon subdivisions",]
+phyla <- phyla[rownames(phyla) != "delta/epsilon subdivisions",]
+#Require more than 10000 reads in a sample to be analyzed
+phyla <- phyla[,map$Sample[map$MothChild != "DNA"]]
+phyla <- phyla[,apply(phyla,2,sum)>10000]
+otherPhy <- apply(phyla[apply(phyla,1,sum) <= 100,],2,sum)
+phyla <- rbind(phyla[apply(phyla,1,sum) > 100,],otherPhy)
+rownames(phyla)[nrow(phyla)] <- "Other_Low_Abundance"
+genus <- genus[,map$Sample[map$MothChild != "DNA"]]
+genus <- genus[,apply(genus,2,sum)>10000]
+otherGen <- apply(genus[apply(genus,1,sum) <= 100,],2,sum)
+genus <- rbind(genus[apply(genus,1,sum) > 100,],otherGen)
+rownames(genus)[nrow(genus)] <- "Other_Low_Abundance"
+species <- species[,map$Sample[map$MothChild != "DNA"]]
+species <- species[,apply(species,2,sum)>10000]
+otherSpec <- apply(species[apply(species,1,sum) <= 100,],2,sum)
+species <- rbind(species[apply(species,1,sum) > 100,],otherSpec)
+rownames(species)[nrow(species)] <- "Other_Low_Abundance"
+map2 <- map[map$MothChild != "DNA",]
+map <- map[colnames(phyla),]
+#Create a counts-per-million matrix for each taxonomic level
+CPMphyla <- t(t(phyla)/apply(phyla,2,sum)*1000000)
+CPMgenus <- t(t(genus)/apply(genus,2,sum)*1000000)
+CPMspecies <- t(t(species)/apply(species,2,sum)*1000000)
+```
+
+### Basic information about samples:
+
+```{r, message=FALSE}
+writeLines(paste("Number of infant samples:\t",
+      dim(map2[map$MothChild=="Infant",])[1],
+      "\nMedian number of samples per infant:\t",
+      median(table(map$Subject[map$MothChild=="Infant"])),
+      "\nMedian age at first sample:\t",
+      median(unlist(lapply(unique(map$Subject[map$MothChild=="Infant"]),function(x){min(map[map$Subject==x  & map$Age < 1000,"Age"])}))),
+      "\nMedian age at final sample:\t",
+      median(unlist(lapply(unique(map$Subject[map$MothChild=="Infant"]),function(x){max(map[map$Subject==x  & map$Age < 1000,"Age"])}))),
+      "\nNumber of samples with at least 10000 reads:\t",
+      dim(map)[1],
+      "\nMedian reads per sample:\t",median(apply(phyla,2,sum)), sep=""))
+```
+
+
+### Basic information about taxa
+
+```{r, message=FALSE}
+writeLines(paste("Number of unique Phyla: \t",
+                 dim(phyla[!rownames(phyla)%in%c("undefined","Other_Low_Abundance"),])[1],
+                 "\nNumber of unique Genera:\t",
+                 dim(genus[!rownames(genus)%in%c("undefined","Other_Low_Abundance"),])[1],
+                 "\nNumber of unique species:\t",
+                 dim(species[!rownames(species)%in%c("undefined","Other_Low_Abundance"),])[1], sep=""))
+```
+
+### Most common taxa in asymptomatic (control) infants: {.tabset}
+
+#### Phylum
+
+```{r, message=FALSE, results="as.is"}
+topPhy <- rbind(apply(CPMphyla[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy"]],1,mean)[order(apply(CPMphyla[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy"]],1,mean),decreasing=TRUE)[1:6]]/10000,
+apply(CPMphyla[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy" & !is.na(map$timepoint) & map$timepoint == 1]],1,mean)[order(apply(CPMphyla[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy"]],1,mean),decreasing=TRUE)[1:6]]/10000,
+apply(CPMphyla[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy" & !is.na(map$timepoint) & map$timepoint > 5]],1,mean)[order(apply(CPMphyla[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy"]],1,mean),decreasing=TRUE)[1:6]]/10000)
+rownames(topPhy) <- c("All ages","First timepoint", "Late timepoints")
+kable(t(topPhy), caption = "The most abundant phyla in control infants")
+```
+
+#### Genus
+
+```{r, message=FALSE, results="as.is"}
+topGen <- rbind(apply(CPMgenus[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy"]],1,mean)[order(apply(CPMgenus[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy"]],1,mean),decreasing=TRUE)[1:15]]/10000,
+apply(CPMgenus[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy" & !is.na(map$timepoint) & map$timepoint == 1]],1,mean)[order(apply(CPMgenus[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy"]],1,mean),decreasing=TRUE)[1:15]]/10000,
+apply(CPMgenus[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy" & !is.na(map$timepoint) & map$timepoint > 5]],1,mean)[order(apply(CPMgenus[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy"]],1,mean),decreasing=TRUE)[1:15]]/10000)
+rownames(topGen) <- c("All ages","First timepoint", "Late timepoints")
+kable(t(topGen), caption = "The most abundant genera in control infants")
+```
+
+#### Species
+
+```{r, message=FALSE, results="as.is"}
+topSpec <- rbind(apply(CPMspecies[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy"]],1,mean)[order(apply(CPMspecies[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy"]],1,mean),decreasing=TRUE)[1:15]]/10000,
+apply(CPMspecies[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy" & !is.na(map$timepoint) & map$timepoint == 1]],1,mean)[order(apply(CPMspecies[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy"]],1,mean),decreasing=TRUE)[1:15]]/10000,
+apply(CPMspecies[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy" & !is.na(map$timepoint) & map$timepoint > 5]],1,mean)[order(apply(CPMspecies[,map$Sample[map$MothChild == "Infant" & map$InfectionStatus == "Healthy"]],1,mean),decreasing=TRUE)[1:15]]/10000)
+rownames(topSpec) <- c("All ages","First timepoint", "Late timepoints")
+kable(t(topSpec), caption = "The most abundant species in control infants")
+```
+
+```{r, message=FALSE}
+#This chunk of code is working behind the scenes to build long dataframes of CPM values for ggplot purposes.
+
+#Create a ggPlot style table with all mapping info for phyla
+CPMggPhyla <- melt(CPMphyla)
+CPMggPhyla[] <- lapply(CPMggPhyla, as.character)
+colnames(CPMggPhyla) <- c("Phylum","Sample","Value")
+CPMggPhyla$Value <- unlist(lapply(CPMggPhyla$Value, as.numeric))
+CPMggPhyla$Value <- CPMggPhyla$Value/10000
+CPMggPhyla$HIVStatus <- map[CPMggPhyla$Sample,"HIVStatus"]
+CPMggPhyla$InfectionStatus <- map[CPMggPhyla$Sample,"InfectionStatus"]
+CPMggPhyla$Age <- map[CPMggPhyla$Sample,"Age"]
+CPMggPhyla$MothChild <- map[CPMggPhyla$Sample,"MothChild"]
+CPMggPhyla$Subject <- map[CPMggPhyla$Sample,"Subject"]
+CPMggPhyla$TimeBin <- map[CPMggPhyla$Sample,"timepoint"]
+CPMggPhyla$PrePost <- map[CPMggPhyla$Sample,"PrePostSympt"]
+
+#Create a ggPlot syle table with all mapping info
+CPMggGenus <- melt(CPMgenus)
+CPMggGenus[] <- lapply(CPMggGenus, as.character)
+colnames(CPMggGenus) <- c("Genus","Sample","Value")
+CPMggGenus$Value <- unlist(lapply(CPMggGenus$Value, as.numeric))
+CPMggGenus$Value <- CPMggGenus$Value/10000
+CPMggGenus$HIVStatus <- map[CPMggGenus$Sample,"HIVStatus"]
+CPMggGenus$InfectionStatus <- map[CPMggGenus$Sample,"InfectionStatus"]
+CPMggGenus$Age <- map[CPMggGenus$Sample,"Age"]
+CPMggGenus$MothChild <- map[CPMggGenus$Sample,"MothChild"]
+CPMggGenus$Subject <- map[CPMggGenus$Sample,"Subject"]
+CPMggGenus$TimeBin <- map[CPMggGenus$Sample,"timepoint"]
+CPMggGenus$PrePost <- map[CPMggGenus$Sample,"PrePostSympt"]
+
+#Create a ggPlot syle table with all mapping info
+CPMggSpecies <- melt(CPMspecies)
+CPMggSpecies[] <- lapply(CPMggSpecies, as.character)
+colnames(CPMggSpecies) <- c("Species","Sample","Value")
+CPMggSpecies$Value <- unlist(lapply(CPMggSpecies$Value, as.numeric))
+CPMggSpecies$Value <- CPMggSpecies$Value/10000
+CPMggSpecies$HIVStatus <- map[CPMggSpecies$Sample,"HIVStatus"]
+CPMggSpecies$InfectionStatus <- map[CPMggSpecies$Sample,"InfectionStatus"]
+CPMggSpecies$Age <- map[CPMggSpecies$Sample,"Age"]
+CPMggSpecies$MothChild <- map[CPMggSpecies$Sample,"MothChild"]
+CPMggSpecies$Subject <- map[CPMggSpecies$Sample,"Subject"]
+CPMggSpecies$TimeBin <- map[CPMggSpecies$Sample,"timepoint"]
+CPMggSpecies$PrePost <- map[CPMggSpecies$Sample,"PrePostSympt"]
+
+# Define a function for creating specialized tables for plotting:
+# Everything that isn't named falls into the "Other" category.
+pullPlotTable <- function(inTable, taxList){
+  newTable <- inTable[inTable[,1] %in% c(taxList,"Other_Low_Abundance"),]
+  for(sampName in unique(inTable$Sample)){
+    newTable[newTable$Sample == sampName & newTable[,1] == "Other_Low_Abundance","Value"] <- sum(newTable[newTable$Sample == sampName & newTable[,1] == "Other_Low_Abundance","Value"], inTable[inTable$Sample == sampName & !inTable[,1] %in% c(taxList,"undefined","Other_Low_Abundance"),"Value"])
+  }
+  return(newTable)
+}
+
+# Function for pulling the top abundant taxa from a given set of samples
+getTop <- function(inTable, minVal=1000){
+  tmp <- inTable[apply(inTable,1,mean)>=minVal | rownames(inTable) %in% c("Other_Low_Abundance"),]
+  return(rownames(tmp)[order(apply(tmp,1,mean))])
+}
+```
+
+### Assorted ways of plotting the communities over time {.tabset}
+
+#### Stack bar plots {.tabset}
+
+##### % abundance {.tabset}
+
+###### Phylum
+
+```{r, message=FALSE}
+topHealthyPhyla <- getTop(CPMphyla[,map$Sample[map$MothChild=="Infant" & map$InfectionStatus=="Healthy"]],1000)
+healthyPhyla <- pullPlotTable(CPMggPhyla,topHealthyPhyla)
+ggplot(healthyPhyla[healthyPhyla$InfectionStatus == "Healthy" &
+                    healthyPhyla$MothChild == "Infant",], aes(x=TimeBin,y=Value,fill=factor(Phylum, levels=topHealthyPhyla))) +
+  scale_fill_manual(name="Phylum",values=col_vector[c(8,9,23,5,6)]) +
+  geom_bar(stat="identity",position="fill") +
+  ggtitle("Phylum abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Average relative abundance") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+###### Genus
+
+```{r, message=FALSE}
+topHealthyGenus <- getTop(CPMgenus[,map$Sample[map$MothChild=="Infant" & map$InfectionStatus=="Healthy"&map$Sample%in%colnames(CPMgenus)]],5000)
+healthyGenus <- pullPlotTable(CPMggGenus,topHealthyGenus)
+healthyGenus$Genus[healthyGenus$Genus=="Other_Low_Abundance"] <- "Other/Low abundance"
+ggplot(healthyGenus[healthyGenus$InfectionStatus == "Healthy" &
+                    healthyGenus$Age < 1000,], aes(x=TimeBin,y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other/Low abundance"))))) +
+  scale_y_continuous(labels = scales::percent_format(),expand = c(0, 0)) +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,28))]) +
+  geom_bar(stat="identity",position="fill") +
+  ggtitle("Maturation of the NP microbiome\nin healthy, asymptomatic infants") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=24),
+        axis.text.x=element_text(face="bold",size=16),
+        axis.text.y=element_text(size=16),
+        axis.title=element_text(face="bold",size=20)) +
+  labs(x="Age (days)", y="Average relative abundance") +
+  theme(legend.text = element_text(colour="grey35", size = 16, face = "bold.italic")) +
+  theme(legend.title = element_text(colour="grey20", size = 20, face = "bold")) +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+###### Sick Genus
+
+```{r, message=FALSE}
+topSickGenus <- getTop(CPMgenus[,map$Sample[map$MothChild=="Infant" & map$InfectionStatus=="RespiratoryIllness"&map$Sample%in%colnames(CPMgenus)&map$Age<1000]],5000)
+sickGenus <- pullPlotTable(CPMggGenus,topSickGenus)
+sickGenus$Genus[sickGenus$Genus=="Other_Low_Abundance"] <- "Other/Low abundance"
+ggplot(sickGenus[sickGenus$InfectionStatus == "RespiratoryIllness" &
+                    sickGenus$MothChild == "Infant" & sickGenus$Age < 1000,], aes(x=TimeBin,y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Delftia","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Proteus","Ochrobactrum","Staphylococcus","Corynebacterium","Other/Low abundance"))))) +
+  scale_y_continuous(labels = scales::percent_format(),expand = c(0, 0)) +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,16,12,10,15,22,9,31,32,17,11,28))]) +
+  geom_bar(stat="identity",position="fill") +
+  theme_classic() +
+  ggtitle("Maturation of the NP microbiome\nin LRTI infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=24),
+        axis.text.x=element_text(face="bold",size=16),
+        axis.text.y=element_text(size=16),
+        axis.title=element_text(face="bold",size=20)) +
+  labs(x="Age (days)", y="Average relative abundance") +
+  theme(legend.text = element_text(colour="grey35", size = 16, face = "bold.italic")) +
+  theme(legend.title = element_text(colour="grey20", size = 20, face = "bold")) +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+###### Species
+
+```{r, message=FALSE}
+topHealthySpecies <- getTop(CPMspecies[,map$Sample[map$MothChild=="Infant" & map$InfectionStatus=="Healthy"]],5000)
+healthySpecies <- pullPlotTable(CPMggSpecies,topHealthySpecies)
+ggplot(healthySpecies[healthySpecies$InfectionStatus == "Healthy" &
+                    healthySpecies$MothChild == "Infant",], aes(x=TimeBin,y=Value,fill=factor(Species, levels=rev(c("Moraxella_nonliquefaciens","Streptococcus_pneumoniae","Streptococcus_mitis","Streptococcus_salivarius","Haemophilus_influenzae","Dolosigranulum_pigrum","Paracoccus_yeei","Anaerobacillus_alkalilacustris","Pseudomonas_aeruginosa","Staphylococcus_simiae","Staphylococcus_epidermidis","Staphylococcus_haemolyticus","Corynebacterium_pseudodiphtheriticum","Corynebacterium_accolens","Corynebacterium_aurimucosum","Other_Low_Abundance"))))) +
+  scale_fill_manual(name="Species",values=col_vector[rev(c(14,18,30,5,13,12,15,9,29,17,37,71,11,2,25,16))]) +
+  geom_bar(stat="identity",position="fill") +
+  ggtitle("Species abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Average relative abundance") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+##### log10(cpm) {.tabset}
+
+###### Phylum
+
+```{r, message=FALSE}
+healthyPhyla$logValue <- log10(healthyPhyla$Value + 1)
+ggplot(healthyPhyla[healthyPhyla$InfectionStatus == "Healthy" &
+                    healthyPhyla$MothChild == "Infant",], aes(x=TimeBin,y=logValue,fill=factor(Phylum, levels=topHealthyPhyla))) +
+  scale_fill_manual(name="Phylum",values=col_vector[c(8,9,23,5,6)]) +
+  geom_bar(stat="identity",position="fill") +
+  ggtitle("Phylum logscale abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Log10(Counts per million)") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+###### Genus
+
+```{r, message=FALSE}
+healthyGenus$logValue <- log10(healthyGenus$Value + 1)
+ggplot(healthyGenus[healthyGenus$InfectionStatus == "Healthy" &
+                    healthyGenus$MothChild == "Infant",], aes(x=TimeBin,y=logValue,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other_Low_Abundance"))))) +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,28))]) +
+  geom_bar(stat="identity",position="fill") +
+  ggtitle("Genus logscale abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="log10(Counts per million)") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+###### Sick Genus
+
+```{r, message=FALSE}
+sickGenus$logValue <- log10(sickGenus$Value + 1)
+ggplot(sickGenus[sickGenus$InfectionStatus == "RespiratoryIllness" &
+                    sickGenus$MothChild == "Infant",], aes(x=TimeBin,y=logValue,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Delftia","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Proteus","Ochrobactrum","Staphylococcus","Corynebacterium","Other_Low_Abundance"))))) +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,16,12,10,15,22,9,31,32,17,11,28))]) +
+  geom_bar(stat="identity",position="fill") +
+  ggtitle("Genus logscale abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="log10(Counts per million)") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+###### Species
+
+```{r, message=FALSE}
+healthySpecies$logValue <- log10(healthySpecies$Value + 1)
+ggplot(healthySpecies[healthySpecies$InfectionStatus == "Healthy" &
+                    healthySpecies$MothChild == "Infant",], aes(x=TimeBin,y=logValue,fill=factor(Species, levels=rev(c("Moraxella_nonliquefaciens","Streptococcus_pneumoniae","Streptococcus_mitis","Streptococcus_salivarius","Haemophilus_influenzae","Dolosigranulum_pigrum","Paracoccus_yeei","Anaerobacillus_alkalilacustris","Pseudomonas_aeruginosa","Staphylococcus_simiae","Staphylococcus_epidermidis","Staphylococcus_haemolyticus","Corynebacterium_pseudodiphtheriticum","Corynebacterium_accolens","Corynebacterium_aurimucosum","Other_Low_Abundance"))))) +
+  scale_fill_manual(name="Species",values=col_vector[rev(c(14,18,30,5,13,12,15,9,29,17,37,71,11,2,25,16))]) +
+  geom_bar(stat="identity",position="fill") +
+  ggtitle("Species logscale abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="log10(Counts per million)") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+#### Binned line plots {.tabset}
+
+##### % abundance {.tabset}
+
+###### Phylum
+
+```{r, message=FALSE}
+PhySum <- summarySE(healthyPhyla[healthyPhyla$MothChild=="Infant" & healthyPhyla$InfectionStatus=="Healthy" & healthyPhyla$Age < 1000,], measurevar="Value", groupvars=c("Phylum","TimeBin"))
+ggplot(PhySum, aes(x=TimeBin, y=Value, group=Phylum, color=factor(Phylum, levels=topHealthyPhyla))) + 
+  geom_line(size=1.5) +
+  scale_color_manual(name="Phylum",values=col_vector[c(8,9,23,5,6)]) +
+  geom_point()+
+  geom_errorbar(aes(ymin=Value-sd, ymax=Value+sd), width=1,
+                 position=position_dodge(0.1), size=1.5) +
+  ggtitle("Phylum abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Percent relative abundance") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+###### Genus
+
+```{r, message=FALSE}
+GenSum <- summarySE(healthyGenus[healthyGenus$MothChild=="Infant" & healthyGenus$InfectionStatus=="Healthy" & healthyGenus$Age < 1000,], measurevar="Value", groupvars=c("Genus","TimeBin"))
+ggplot(GenSum, aes(x=TimeBin, y=Value, group=Genus, color=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other_Low_Abundance"))))) + 
+  geom_line(size=1.5) +
+  scale_color_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,16))]) +
+  geom_point()+
+  geom_errorbar(aes(ymin=Value-sd, ymax=Value+sd), width=1,
+                 position=position_dodge(0.8), size=1) +
+  ggtitle("Genus abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Average relative abundance") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+  
+```
+
+###### Species
+
+```{r, message=FALSE}
+SpecSum <- summarySE(healthySpecies[healthySpecies$MothChild=="Infant" & healthySpecies$InfectionStatus=="Healthy" & healthySpecies$Age < 1000,], measurevar="Value", groupvars=c("Species","TimeBin"))
+ggplot(SpecSum, aes(x=TimeBin, y=Value, group=Species, color=factor(Species, levels=rev(c("Moraxella_nonliquefaciens","Streptococcus_pneumoniae","Streptococcus_mitis","Streptococcus_salivarius","Haemophilus_influenzae","Dolosigranulum_pigrum","Paracoccus_yeei","Anaerobacillus_alkalilacustris","Pseudomonas_aeruginosa","Staphylococcus_simiae","Staphylococcus_epidermidis","Staphylococcus_haemolyticus","Corynebacterium_pseudodiphtheriticum","Corynebacterium_accolens","Corynebacterium_aurimucosum","Other_Low_Abundance"))))) + 
+  geom_line(size=1.5) +
+  scale_color_manual(name="Species",values=col_vector[rev(c(14,18,30,5,13,12,15,9,29,17,37,71,11,2,25,16))]) +
+  geom_point()+
+  geom_errorbar(aes(ymin=Value-sd, ymax=Value+sd), width=1.2,
+                 position=position_dodge(0.8), size=0.9) +
+  ggtitle("Species abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Average relative abundance") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+##### log10(cpm) {.tabset}
+
+###### Phylum
+
+```{r, message=FALSE}
+PhySum <- summarySE(healthyPhyla[healthyPhyla$MothChild=="Infant" & healthyPhyla$InfectionStatus=="Healthy" & healthyPhyla$Age < 1000,], measurevar="logValue", groupvars=c("Phylum","TimeBin"))
+ggplot(PhySum, aes(x=TimeBin, y=logValue, group=Phylum, color=factor(Phylum, levels=topHealthyPhyla))) +
+  geom_line(size=1.5) +
+  scale_color_manual(name="Phylum",values=col_vector[c(8,9,23,5,6)]) +
+  geom_point()+
+  geom_errorbar(aes(ymin=logValue-sd, ymax=logValue+sd), width=1,
+                 position=position_dodge(0.1), size=1.5) +
+  ggtitle("Phylum abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Log10(Counts per million)") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+###### Genus
+
+```{r, message=FALSE}
+GenSum <- summarySE(healthyGenus[healthyGenus$MothChild=="Infant" & healthyGenus$InfectionStatus=="Healthy" & healthyGenus$Age < 1000,], measurevar="logValue", groupvars=c("Genus","TimeBin"))
+ggplot(GenSum, aes(x=TimeBin, y=logValue, group=Genus, color=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other_Low_Abundance"))))) + 
+  geom_line(size=1.5) +
+  scale_color_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,16))]) +
+  geom_point()+
+  geom_errorbar(aes(ymin=logValue-sd, ymax=logValue+sd), width=1,
+                 position=position_dodge(0.4), size=1) +
+  ggtitle("Genus abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Log10(Counts per million)") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+  
+```
+
+###### Species
+
+```{r, message=FALSE}
+SpecSum <- summarySE(healthySpecies[healthySpecies$MothChild=="Infant" & healthySpecies$InfectionStatus=="Healthy" & healthySpecies$Age < 1000,], measurevar="logValue", groupvars=c("Species","TimeBin"))
+ggplot(SpecSum, aes(x=TimeBin, y=logValue, group=Species, color=factor(Species, levels=rev(c("Moraxella_nonliquefaciens","Streptococcus_pneumoniae","Streptococcus_mitis","Streptococcus_salivarius","Haemophilus_influenzae","Dolosigranulum_pigrum","Paracoccus_yeei","Anaerobacillus_alkalilacustris","Pseudomonas_aeruginosa","Staphylococcus_simiae","Staphylococcus_epidermidis","Staphylococcus_haemolyticus","Corynebacterium_pseudodiphtheriticum","Corynebacterium_accolens","Corynebacterium_aurimucosum","Other_Low_Abundance"))))) + 
+  geom_line(size=1.5) +
+  scale_color_manual(name="Species",values=col_vector[rev(c(14,18,30,5,13,12,15,9,29,17,37,71,11,2,25,16))]) +
+  geom_point()+
+  geom_errorbar(aes(ymin=logValue-sd, ymax=logValue+sd), width=1.2,
+                 position=position_dodge(0.3), size=0.9) +
+  ggtitle("Species abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Average relative abundance") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+#### Smoothed line plots {.tabset}
+
+##### % abundance {.tabset}
+
+###### Phylum
+
+```{r, message=FALSE}
+ggplot(healthyPhyla[healthyPhyla$Age < 1000 & healthyPhyla$InfectionStatus=="Healthy",],
+       aes(x=Age, y=Value, group=Phylum, color=factor(Phylum, levels=topHealthyPhyla))) +
+  geom_smooth() +
+  scale_color_manual(name="Phylum",values=col_vector[c(8,9,23,5,6)]) +
+  ggtitle("Phylum abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Percent relative abundance")
+```
+
+###### Genus
+
+```{r,message=FALSE}
+ggplot(healthyGenus[healthyGenus$Age < 1000 & healthyGenus$InfectionStatus == "Healthy",],
+       aes(x=Age, y=Value, group=Genus, color=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other_Low_Abundance"))))) + 
+  geom_smooth() +
+  scale_color_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,16))]) +
+  ggtitle("Genus abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Average relative abundance")
+```
+
+###### Species
+
+```{r, message=FALSE}
+ggplot(healthySpecies[healthySpecies$Age < 1000 & healthySpecies$InfectionStatus == "Healthy",],
+       aes(x=Age, y=Value, group=Species,color=factor(Species, levels=rev(c("Moraxella_nonliquefaciens","Streptococcus_pneumoniae","Streptococcus_mitis","Streptococcus_salivarius","Haemophilus_influenzae","Dolosigranulum_pigrum","Paracoccus_yeei","Anaerobacillus_alkalilacustris","Pseudomonas_aeruginosa","Staphylococcus_simiae","Staphylococcus_epidermidis","Staphylococcus_haemolyticus","Corynebacterium_pseudodiphtheriticum","Corynebacterium_accolens","Corynebacterium_aurimucosum","Other_Low_Abundance"))))) +
+  geom_smooth() +
+  scale_color_manual(name="Species",values=col_vector[rev(c(14,18,30,5,13,12,15,9,29,17,37,71,11,2,25,16))]) +
+  ggtitle("Species abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Percent relative abundance")
+```
+
+##### log10(cpm) {.tabset}
+
+###### Phylum
+
+```{r, message=FALSE}
+ggplot(healthyPhyla[healthyPhyla$Age < 1000 & healthyPhyla$InfectionStatus=="Healthy",],
+       aes(x=Age, y=logValue, group=Phylum, color=factor(Phylum, levels=topHealthyPhyla))) +
+  geom_smooth() +
+  scale_color_manual(name="Phylum",values=col_vector[c(8,9,23,5,6)]) +
+  ggtitle("Phylum abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Percent relative abundance")
+```
+
+###### Genus
+
+```{r,message=FALSE}
+ggplot(healthyGenus[healthyGenus$Age < 1000 & healthyGenus$InfectionStatus == "Healthy",],
+       aes(x=Age, y=logValue, group=Genus, color=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other_Low_Abundance"))))) + 
+  geom_smooth() +
+  scale_color_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,16))]) +
+  ggtitle("Genus abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Average relative abundance")
+```
+
+###### Species
+
+```{r, message=FALSE}
+ggplot(healthySpecies[healthySpecies$Age < 1000 & healthySpecies$InfectionStatus == "Healthy",],
+       aes(x=Age, y=logValue, group=Species,color=factor(Species, levels=rev(c("Moraxella_nonliquefaciens","Streptococcus_pneumoniae","Streptococcus_mitis","Streptococcus_salivarius","Haemophilus_influenzae","Dolosigranulum_pigrum","Paracoccus_yeei","Anaerobacillus_alkalilacustris","Pseudomonas_aeruginosa","Staphylococcus_simiae","Staphylococcus_epidermidis","Staphylococcus_haemolyticus","Corynebacterium_pseudodiphtheriticum","Corynebacterium_accolens","Corynebacterium_aurimucosum","Other_Low_Abundance"))))) +
+  geom_smooth() +
+  scale_color_manual(name="Species",values=col_vector[rev(c(14,18,30,5,13,12,15,9,29,17,37,71,11,2,25,16))]) +
+  ggtitle("Species abundance over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Percent relative abundance")
+```
+
+### Mixed-effects linear models: {.tabset}
+
+#### Phylum
+
+```{r, message=FALSE, results="as.is"}
+runMixedLM <- function(inTable, taxon){
+  inTable <- cbind(t(inTable),map[colnames(inTable),])
+  colnames(inTable)[colnames(inTable)==taxon] <- "taxon"
+  healthTime <- lmer(taxon ~ Age + HIVStatus + (1|Subject), data=inTable)
+  return(healthTime)
+}
+
+phyTimeSig <- data.frame(Other=c(1,1))
+rownames(phyTimeSig) <- c("Age","HIVStatus")
+for(organism in topHealthyPhyla[-1]){
+  phyTimeSig[[organism]] <- Anova(runMixedLM(CPMphyla[,map$Sample[map$Age<1000 & map$InfectionStatus=="Healthy"]],organism))[,3]
+}
+phyTimeQ <- matrix(p.adjust(unlist(phyTimeSig),method="fdr"),nrow=2)
+colnames(phyTimeQ) <- colnames(phyTimeSig)
+rownames(phyTimeQ) <- rownames(phyTimeSig)
+kable(t(phyTimeQ[,phyTimeQ[1,] <= 0.1]), caption="P-values for the effect of Age/HIV status on abundance")
+```
+
+#### Genus
+
+```{r, message=FALSE, results="as.is"}
+genTimeSig <- data.frame(Other=c(1,1))
+rownames(genTimeSig) <- c("Age","HIVStatus")
+for(organism in topHealthyGenus[-1]){
+  genTimeSig[[organism]] <- Anova(runMixedLM(CPMgenus[,map$Sample[map$Age<1000 & map$InfectionStatus=="Healthy"]],organism))[,3]
+}
+genTimeQ <- matrix(p.adjust(unlist(genTimeSig),method="fdr"),nrow=2)
+colnames(genTimeQ) <- colnames(genTimeSig)
+rownames(genTimeQ) <- rownames(genTimeSig)
+kable(t(genTimeQ[,genTimeQ[1,] <= 0.1]), caption="P-values for the effect of Age/HIV status on genus abundance")
+
+for(organism in topHealthyGenus[-1]){
+  genTSig2[[organism]] <- Anova(runMixedLM(log(CPMgenus[,map$Sample[map$Age<1000 & map$InfectionStatus=="Healthy"]]+1),organism))[,3]
+}
+genTQ2 <- matrix(p.adjust(unlist(genTSig2),method="fdr"),nrow=2)
+colnames(genTQ2) <- colnames(genTSig2)
+rownames(genTQ2) <- rownames(genTSig2)
+kable(t(genTQ2[,genTQ2[1,] <= 0.1]), caption="P-values for the effect of Age/HIV status on genus log(CPM)")
+```
+
+#### Species
+
+```{r, message=FALSE, results="as.is"}
+specTimeSig <- data.frame(Other=c(1,1))
+rownames(specTimeSig) <- c("Age","HIVStatus")
+for(organism in topHealthySpecies[-1]){
+  specTimeSig[[organism]] <- Anova(runMixedLM(CPMspecies[,map$Sample[map$Age<1000 & map$InfectionStatus=="Healthy"]],organism))[,3]
+}
+specTimeQ <- matrix(p.adjust(unlist(specTimeSig),method="fdr"),nrow=2)
+colnames(specTimeQ) <- colnames(specTimeSig)
+rownames(specTimeQ) <- rownames(specTimeSig)
+kable(t(specTimeQ[,specTimeQ[1,] <= 0.1]), caption="P-values for the effect of Age/HIV status on species abundance")
+```
+
+### Diversity in healthy infants {.tabset}
+
+#### Shannon index
+
+```{r, message=FALSE}
+set.seed(314)
+#Diversity of the rarefied data; don't want to overestimate the high-counts samples
+shanHealth <- diversity(rrarefy(ceiling(t(species)),10000), index="shannon")
+chaoHealth <- apply(t(rrarefy(ceiling(t(species)),10000)), 2, chao1)
+obsHealth <- apply(t(rrarefy(ceiling(t(species)),10000)), 2, function(x){sum(x>0)})
+fullHealth <- data.frame(sampNames=c(names(shanHealth),names(chaoHealth),names(obsHealth)),diversity=c(shanHealth,chaoHealth,obsHealth),Index=c(rep("Shannon",length(shanHealth)),rep("Chao1",length(shanHealth)),rep("Observed",length(shanHealth))))
+fullHealth <- cbind(fullHealth, map[fullHealth$sampNames,])
+divSum <- summarySE(fullHealth[fullHealth$MothChild=="Infant" & fullHealth$InfectionStatus=="Healthy" & fullHealth$Age < 1000,], measurevar="diversity", groupvars=c("Index","timepoint"))
+
+ggplot(divSum[divSum$Index=="Shannon",], aes(x=timepoint, y=diversity, group=Index)) + 
+  geom_line(size=1.5, color="darkblue") +
+  geom_point() +
+  geom_errorbar(aes(ymin=diversity-sd, ymax=diversity+sd), width=1.2, size=0.9,color="darkblue") +
+  ggtitle("Diversity measures over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Shannon index") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+#### Chao1 index
+
+```{r, message=FALSE}
+ggplot(divSum[divSum$Index=="Chao1",], aes(x=timepoint, y=diversity, group=factor(Index,levels=c("Chao1")))) + 
+  geom_line(size=1.5, color="darkgreen") +
+  geom_point() +
+  geom_errorbar(aes(ymin=diversity-sd, ymax=diversity+sd), width=1.2,size=0.9, color="darkgreen") +
+  ggtitle("Diversity measures over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Chao1 index") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+#### Observed species
+
+```{r, message=FALSE}
+ggplot(divSum[divSum$Index=="Observed",], aes(x=timepoint, y=diversity, group=Index)) + 
+  geom_line(size=1.5, color="darkred") +
+  geom_point() +
+  geom_errorbar(aes(ymin=diversity-sd, ymax=diversity+sd), width=1.2,size=0.9, color="darkred") +
+  ggtitle("Diversity measures over time\nin healthy, asymptomatic infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Observed species") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+```
+
+### Sick infants (at onset of symptoms) {.tabset}
+To explore dysbiosis at the onset of active symptoms, we need to compare sick infants' microbiomes to those of healthy infants in the same age window (since we know that age make a big difference).
+To accomplish this, we need to use Z scores or beta-diversity distances.
+
+#### Z-scores {.tabset}
+
+Score generation:
+```{r, message=FALSE}
+# Z scores here are going to be based off of log-transformed abundace data.
+# Z scores assume a normal distribution, and that's a much more reasonable assumsion with log(cpm).
+ZScoresPhy <- data.frame(Organism=c("Test"),TimeBin=c(7),Mean=c(5),SD=c(2),stringsAsFactors = FALSE)
+for(taxon in rownames(CPMphyla)){
+  for(TimeBin in 0:6){
+    ZScoresPhy <- rbind(ZScoresPhy, c(taxon,TimeBin,mean(log2(CPMphyla[taxon,map$Sample[!is.na(map$timepoint) & map$timepoint==TimeBin & map$InfectionStatus=="Healthy"]]+0.1)),sd(log2(CPMphyla[taxon,map$Sample[!is.na(map$timepoint) & map$timepoint==TimeBin & map$InfectionStatus=="Healthy"]]+0.1))+0.1))
+  }
+}
+ZScoresPhy <- ZScoresPhy[-1,]
+ZScoresGen <- data.frame(Organism=c("Test"),TimeBin=c(7),Mean=c(5),SD=c(2),stringsAsFactors = FALSE)
+for(taxon in rownames(CPMgenus)){
+  for(TimeBin in 0:6){
+    ZScoresGen <- rbind(ZScoresGen, c(taxon,TimeBin,mean(log2(CPMgenus[taxon,map$Sample[!is.na(map$timepoint) & map$timepoint==TimeBin & map$InfectionStatus=="Healthy"]]+0.1)),sd(log2(CPMgenus[taxon,map$Sample[!is.na(map$timepoint) & map$timepoint==TimeBin & map$InfectionStatus=="Healthy"]]+0.1))+0.1))
+  }
+}
+ZScoresGen <- ZScoresGen[-1,]
+ZScoresSpec <- data.frame(Organism=c("Test"),TimeBin=c(7),Mean=c(5),SD=c(2),stringsAsFactors = FALSE)
+for(taxon in rownames(CPMspecies)){
+  for(TimeBin in 0:6){
+    ZScoresSpec <- rbind(ZScoresSpec, c(taxon,TimeBin,mean(log2(CPMspecies[taxon,map$Sample[!is.na(map$timepoint) & map$timepoint==TimeBin & map$InfectionStatus=="Healthy"]]+0.1)),sd(log2(CPMspecies[taxon,map$Sample[!is.na(map$timepoint) & map$timepoint==TimeBin & map$InfectionStatus=="Healthy"]]+0.1))+0.1))
+  }
+}
+ZScoresSpec <- ZScoresSpec[-1,]
+ZScoresPhy$TimeBin <- as.numeric(ZScoresPhy$TimeBin)
+ZScoresGen$TimeBin <- as.numeric(ZScoresGen$TimeBin)
+ZScoresSpec$TimeBin <- as.numeric(ZScoresSpec$TimeBin)
+ZScoresPhy$Mean <- as.numeric(ZScoresPhy$Mean)
+ZScoresGen$Mean <- as.numeric(ZScoresGen$Mean)
+ZScoresSpec$Mean <- as.numeric(ZScoresSpec$Mean)
+ZScoresPhy$SD <- as.numeric(ZScoresPhy$SD)
+ZScoresGen$SD <- as.numeric(ZScoresGen$SD)
+ZScoresSpec$SD <- as.numeric(ZScoresSpec$SD)
+
+
+phyZmat <- CPMphyla[,map$Sample[map$Age < 1000]]
+for(sampName in colnames(phyZmat)){
+  tmpZ <- ZScoresPhy[ZScoresPhy$TimeBin == map$timepoint[map$Sample==sampName],]
+  phyZmat[,sampName] <- (log2(CPMphyla[,sampName]+0.1)-tmpZ[,3])/tmpZ[,4]
+}
+genZmat <- CPMgenus[,map$Sample[map$Age < 1000]]
+for(sampName in colnames(genZmat)){
+  tmpZ <- ZScoresGen[ZScoresGen$TimeBin == map$timepoint[map$Sample==sampName],]
+  genZmat[,sampName] <- (log2(CPMgenus[,sampName]+0.1)-tmpZ[,3])/tmpZ[,4]
+}
+specZmat <- CPMspecies[,map$Sample[map$Age < 1000]]
+for(sampName in colnames(specZmat)){
+  tmpZ <- ZScoresSpec[ZScoresSpec$TimeBin == map$timepoint[map$Sample==sampName],]
+  specZmat[,sampName] <- (log2(CPMspecies[,sampName]+0.1)-tmpZ[,3])/tmpZ[,4]
+}
+
+CPMggPhyla$Zscore <- NA
+for(sampName in colnames(phyZmat)){
+  for(orgName in rownames(phyZmat)){
+    CPMggPhyla$Zscore[CPMggPhyla$Sample==sampName & CPMggPhyla$Phylum==orgName] <- phyZmat[orgName,sampName]
+  }
+}
+CPMggGenus$Zscore <- NA
+for(sampName in colnames(genZmat)){
+  for(orgName in rownames(genZmat)){
+    CPMggGenus$Zscore[CPMggGenus$Sample==sampName & CPMggGenus$Genus==orgName] <- genZmat[orgName,sampName]
+  }
+}
+CPMggSpecies$Zscore <- NA
+for(sampName in colnames(specZmat)){
+  for(orgName in rownames(specZmat)){
+    CPMggSpecies$Zscore[CPMggSpecies$Sample==sampName & CPMggSpecies$Species==orgName] <- specZmat[orgName,sampName]
+  }
+}
+
+
+# Create a list of the 10 samples where symptoms first manifest:
+OnsetSymp <- c("X1132","X4340","X4196","X5730","X10102","X10548","X10844","X9898","X8779","X12584")
+CPMggPhyla$Onset <- NA
+CPMggPhyla$Onset[CPMggPhyla$InfectionStatus=="Healthy" & CPMggPhyla$Age<1000] <- "Healthy"
+CPMggPhyla$Onset[CPMggPhyla$Sample %in% OnsetSymp] <- "Sick"
+CPMggGenus$Onset <- NA
+CPMggGenus$Onset[CPMggGenus$InfectionStatus=="Healthy" & CPMggGenus$Age<1000] <- "Healthy"
+CPMggGenus$Onset[CPMggGenus$Sample %in% OnsetSymp] <- "Sick"
+CPMggSpecies$Onset <- NA
+CPMggSpecies$Onset[CPMggSpecies$InfectionStatus=="Healthy" & CPMggSpecies$Age<1000] <- "Healthy"
+CPMggSpecies$Onset[CPMggSpecies$Sample %in% OnsetSymp] <- "Sick"
+
+#Manually create a "days to infection" table for the sick samples
+CPMggGenus$timeToInfection <- NA
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="0884-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="0884-1"]-69
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="0719-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="0719-1"]-35
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="0955-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="0955-1"]-59
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="0218-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="0218-1"]-68
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="1035-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="1035-1"]-39
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="0631-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="0631-1"]-27
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="1087-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="1087-1"]-23
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="0071-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="0071-1"]-45
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="1145-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="1145-1"]-50
+CPMggGenus$timeToInfection[CPMggGenus$Subject=="1097-1"] <- CPMggGenus$Age[CPMggGenus$Subject=="1097-1"]-11
+
+
+```
+
+##### Phylum {.tabset}
+
+###### High abundance
+
+```{r,message=FALSE}
+ggplot(CPMggPhyla[CPMggPhyla$Phylum %in% topHealthyPhyla & !is.na(CPMggPhyla$Onset),],aes(x=Onset, y=Zscore, fill=factor(Phylum, levels=topHealthyPhyla))) +
+  geom_boxplot() +
+  scale_fill_manual(name="Phylum",values=col_vector[c(8,9,23,5,6)]) +
+  facet_grid(~Phylum,scales="free",space="free") +
+  ggtitle("Phylum abundance in sick vs healthy infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Symptom status", y="Z scores of log(cpm)")
+```
+
+###### Significant only
+
+```{r, message=FALSE, results="as.is"}
+# Run tests on difference from normal for each organism
+# For now, this will be a 
+sickResPhy <- data.frame(Test=1)
+for(organism in rownames(phyZmat)){
+  tryCatch({
+    sickResPhy[[organism]] <- t.test(phyZmat[organism,OnsetSymp],phyZmat[organism,map$Sample[!is.na(map$timepoint) & map$InfectionStatus=="Healthy"]])$p.value
+  },
+  error=function(cond){
+    sickResPhy[[organism]] <- 1
+  })
+}
+sickResPhy <- sickResPhy[,-1]
+
+ggplot(CPMggPhyla[CPMggPhyla$Phylum %in% colnames(sickResPhy)[sickResPhy<0.1] & !is.na(CPMggPhyla$Onset),],aes(x=Onset, y=Zscore, fill=factor(Phylum, levels=colnames(sickResPhy)[sickResPhy<0.1]))) +
+  geom_boxplot() +
+  scale_fill_manual(name="Phylum",values=col_vector[c(31:37,8)]) +
+  facet_grid(~Phylum,scales="free",space="free") +
+  ggtitle("Phylum abundance in sick vs healthy infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Symptom status", y="Z scores of log(cpm)")
+```
+
+##### Genus {.tabset}
+
+###### High abundance
+
+```{r,message=FALSE}
+ggplot(CPMggGenus[CPMggGenus$Genus %in% topHealthyGenus & !is.na(CPMggGenus$Onset),],aes(x=Onset, y=Zscore, fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other_Low_Abundance"))))) +
+  geom_boxplot() +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,16))]) +
+  facet_grid(~Genus,scales="free",space="free") +
+  ggtitle("Genus abundance in sick vs healthy infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Symptom status", y="Z scores of log(cpm)")
+```
+
+###### Significant only
+
+```{r, message=FALSE}
+sickResGen <- data.frame(Test=1)
+for(organism in rownames(genZmat)){
+  tryCatch({
+    sickResGen[[organism]] <- t.test(genZmat[organism,OnsetSymp],genZmat[organism,map$Sample[!is.na(map$timepoint) & map$InfectionStatus=="Healthy"]])$p.value
+  },
+  error=function(cond){
+    sickResGen[[organism]] <- 1
+  })
+}
+sickResGen <- sickResGen[,-1]
+
+ggplot(CPMggGenus[CPMggGenus$Genus %in% topHealthyGenus & CPMggGenus$Genus %in% colnames(sickResGen)[sickResGen<0.1] & !is.na(CPMggGenus$Onset),],aes(x=Onset, y=Zscore, fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Other_Low_Abundance"))))) +
+  geom_boxplot() +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(10))]) +
+  facet_grid(~Genus,scales="free",space="free") +
+  ggtitle("Genus abundance in sick vs healthy infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Symptom status", y="Z scores of log(cpm)")
+```
+
+##### Species {.tabset}
+
+###### High abundance
+
+```{r, message=FALSE}
+ggplot(CPMggSpecies[CPMggSpecies$Species %in% topHealthySpecies & !is.na(CPMggSpecies$Onset),],aes(x=Onset, y=Zscore, fill=factor(Species, levels=rev(c("Moraxella_nonliquefaciens","Streptococcus_pneumoniae","Streptococcus_mitis","Streptococcus_salivarius","Haemophilus_influenzae","Dolosigranulum_pigrum","Paracoccus_yeei","Anaerobacillus_alkalilacustris","Pseudomonas_aeruginosa","Staphylococcus_simiae","Staphylococcus_epidermidis","Staphylococcus_haemolyticus","Corynebacterium_pseudodiphtheriticum","Corynebacterium_accolens","Corynebacterium_aurimucosum","Other_Low_Abundance"))))) +
+  geom_boxplot() +
+  scale_fill_manual(name="Species",values=col_vector[rev(c(14,18,30,5,13,12,15,9,29,17,37,71,11,2,25,16))]) +
+  facet_grid(~Species,scales="free",space="free") +
+  ggtitle("Species abundance in sick vs healthy infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Symptom status", y="Z scores of log(cpm)")
+```
+
+###### Significant only
+
+```{r,message=FALSE}
+sickResSpec <- data.frame(Test=1)
+for(organism in rownames(specZmat)){
+  tryCatch({
+    sickResSpec[[organism]] <- t.test(specZmat[organism,OnsetSymp],specZmat[organism,map$Sample[!is.na(map$timepoint) & map$InfectionStatus=="Healthy"]])$p.value
+  },
+  error=function(cond){
+    sickResSpec[[organism]] <- 1
+  })
+}
+sickResSpec <- sickResSpec[,-1]
+tmp <- colnames(sickResSpec)[sickResSpec<0.01]
+sigSpec <- tmp[order(apply(CPMspecies[tmp,],1,mean),decreasing = TRUE)][1:16]
+
+ggplot(CPMggSpecies[CPMggSpecies$Species %in% sigSpec & !is.na(CPMggSpecies$Onset),],aes(x=Onset, y=Zscore, fill=factor(Species, levels=sigSpec))) +
+  geom_boxplot() +
+  scale_fill_manual(name="Species",values=col_vector[rev(c(1:15,17))]) +
+  facet_grid(~Species,scales="free",space="free") +
+  ggtitle("Species abundance in sick vs healthy infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Symptom status", y="Z scores of log(cpm)")
+```
+
+```{r, message=FALSE, echo=FALSE}
+saveRDS(map, "/Users/labadmin2/Documents/infant_gill/ProperLabels/map.RDS")
+saveRDS(species,"/Users/labadmin2/Documents/infant_gill/ProperLabels/species.RDS")
+saveRDS(genus,"/Users/labadmin2/Documents/infant_gill/ProperLabels/genus.RDS")
+saveRDS(phyla,"/Users/labadmin2/Documents/infant_gill/ProperLabels/phyla.RDS")
+saveRDS(CPMggSpecies,"/Users/labadmin2/Documents/infant_gill/ProperLabels/CPMggSpecies.RDS")
+saveRDS(CPMggGenus,"/Users/labadmin2/Documents/infant_gill/ProperLabels/CPMggGenus.RDS")
+saveRDS(CPMggPhylum,"/Users/labadmin2/Documents/infant_gill/ProperLabels/CPMggPhylum.RDS")
+```
+

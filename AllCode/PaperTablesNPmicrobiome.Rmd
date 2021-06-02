@@ -1,0 +1,101 @@
+---
+title: "CreateTables"
+author: "Tyler Faits"
+date: "6/4/2020"
+output:
+    html_document:
+      toc: true
+      toc_depth: 2
+      number_sections: true
+      code_folding: hide
+---
+
+```{r setup, include=FALSE}
+setwd("/Users/labadmin2/Documents/infant_gill/ProperLabels")
+require(ggplot2)
+require(ComplexHeatmap)
+require(reshape2)
+library(RColorBrewer)
+require(DESeq2)
+require(gridExtra)
+require(Rmisc)
+require(vegan)
+require(fossil)
+require(circlize)
+require(knitr)
+require(lme4)
+require(car)
+phyla <- readRDS("phyla.RDS")
+genus <- readRDS("genus.RDS")
+species <- readRDS("species.RDS")
+CPMggPhyla <- readRDS("CPMggPhyla.RDS")
+CPMggGenus <- readRDS("CPMggGenus.RDS")
+CPMggSpecies <- readRDS("CPMggSpecies.RDS")
+CPMphyla <- readRDS("CPMphyla.RDS")
+CPMgenus <- readRDS("CPMgenus.RDS")
+CPMspecies <- readRDS("CPMspecies.RDS")
+map <- readRDS("map.RDS")
+```
+
+## R Markdown
+Welcome to table generation. This Rmarkdown should be modified whenever we make changes to the tables included in our manuscript.
+
+### First up: Top genera {.tabset}
+These tables will include only and all genera which have a mean relative abundance of at least 0.1% within the specified samples.
+
+#### Healthy Infants
+
+```{r, message=FALSE}
+#Make list of all healthy infants
+healthyInfants <- unique(map$Subject[map$MothChild=="Infant" & map$InfectionStatus=="Healthy"])
+sickInfants <- unique(map$Subject[map$MothChild=="Infant" & map$InfectionStatus=="RespiratoryIllness"])
+#Note that there are 198 samples, 30 subjects
+topGeneraTMP <- c() #Top genera are defined as: at least 0.1% abundance average across all samples AND at least 0.1% abundance in at least 3 different infants
+for(Genus in rownames(CPMgenus)){
+  if(sum(unlist(lapply(1:30,function(x){max(CPMgenus[Genus,map$Sample[map$Subject==healthyInfants[x]]])}))>1000)>2 & mean(CPMgenus[Genus,map$Sample[map$Subject %in% healthyInfants]])>1000){
+    topGeneraTMP <- c(topGeneraTMP,Genus)
+  }
+}
+topTableHealthy <- data.frame(Genus=c("None"),Mean=c(1),Median=c(1),
+                              SD=c(1),
+                              frequencySamples=c(1),frequencySubjects=c(1),
+                              stringsAsFactors=FALSE)
+for(Genus in topGeneraTMP[order(apply(CPMgenus[topGeneraTMP,map$Sample[map$Subject %in% healthyInfants]],1,mean),decreasing=TRUE)]){
+  tmp <- CPMgenus[Genus,map$Sample[map$Subject %in% healthyInfants]]
+  topTableHealthy <- rbind(topTableHealthy,c(Genus,mean(tmp)/10000,median(tmp)/10000,
+                                             sd(tmp/10000),
+                                             sum(tmp>1000),sum(unlist(lapply(1:30,function(x){max(CPMgenus[Genus,map$Sample[map$Subject==healthyInfants[x]]])}))>1000)))
+}
+#Frequency is based off of detecting 0.1% abundance in a sample or in at least one sample/subject.
+topTableHealthy <- topTableHealthy[-1,]
+kable((topTableHealthy[order(as.numeric(topTableHealthy[,6]),decreasing=TRUE),]), caption = "The most commonly found genera in control infants")
+```
+
+#### LRTI Infants
+
+```{r, message=FALSE}
+#For LRTI infants, there are 65 samples, 10 subjects
+topGeneraTMP <- c() #Top genera are defined as: at least 0.1% abundance average across all samples
+for(Genus in rownames(CPMgenus)){
+  if(mean(CPMgenus[Genus,map$Sample[map$Subject %in% sickInfants]])>1000){
+    topGeneraTMP <- c(topGeneraTMP,Genus)
+  }
+}
+topTableLRTI <- data.frame(Genus=c("None"),Mean=c(1),Median=c(1),
+                              SD=c(1),
+                              frequencySamples=c(1),frequencySubjects=c(1),
+                              stringsAsFactors=FALSE)
+for(Genus in topGeneraTMP[order(apply(CPMgenus[topGeneraTMP,map$Sample[map$Subject %in% sickInfants]],1,mean),decreasing=TRUE)]){
+  tmp <- CPMgenus[Genus,map$Sample[map$Subject %in% sickInfants]]
+  topTableLRTI <- rbind(topTableLRTI,c(Genus,mean(tmp)/10000,median(tmp)/10000,
+                                             sd(tmp/10000),
+                                             sum(tmp>1000)*100/65,sum(unlist(lapply(1:10,function(x){max(CPMgenus[Genus,map$Sample[map$Subject==sickInfants[x]]])}))>1000)*10))
+}
+#Frequency is based off of detecting 0.1% abundance in a sample or in at least one sample/subject.
+topTableLRTI <- topTableLRTI[-1,]
+kable((topTableLRTI[order(as.numeric(topTableLRTI[,6]),decreasing=TRUE),]), caption = "The most commonly found genera in LRTI infants")
+```
+
+
+
+

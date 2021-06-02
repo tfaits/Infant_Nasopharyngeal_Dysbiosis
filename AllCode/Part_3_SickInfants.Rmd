@@ -1,0 +1,166 @@
+---
+title: "Part 3: Sick Infants"
+author: "Tyler Faits"
+date: "2/3/2020"
+output:
+    html_document:
+      toc: true
+      toc_depth: 2
+      number_sections: true
+      code_folding: hide
+---
+
+### Sick infants {.tabset}
+
+Here we track all the sick infants over time.
+
+```{r,message=FALSE, results="asis"}
+setwd("/Users/labadmin2/Documents/infant_gill/ProperLabels")
+require(ggplot2)
+require(ComplexHeatmap)
+require(reshape2)
+library(RColorBrewer)
+require(DESeq2)
+require(gridExtra)
+require(Rmisc)
+require(vegan)
+require(fossil)
+require(circlize)
+require(knitr)
+require(lme4)
+require(car)
+phyla <- readRDS("phyla.RDS")
+genus <- readRDS("genus.RDS")
+species <- readRDS("species.RDS")
+CPMggPhyla <- readRDS("CPMggPhyla.RDS")
+CPMggGenus <- readRDS("CPMggGenus.RDS")
+CPMggSpecies <- readRDS("CPMggSpecies.RDS")
+CPMphyla <- readRDS("CPMphyla.RDS")
+CPMgenus <- readRDS("CPMgenus.RDS")
+CPMspecies <- readRDS("CPMspecies.RDS")
+map <- readRDS("map.RDS")
+#Create color palette to be used for plotting
+qual_col_pals = brewer.pal.info[brewer.pal.info$category == 'qual',]
+col_vector = unlist(mapply(brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+sickInfants <- unique(map$Subject[map$MothChild=="Infant" & map$InfectionStatus=="RespiratoryIllness"])
+healthyInfants <- unique(map$Subject[map$MothChild=="Infant" & map$InfectionStatus=="Healthy"])
+
+pullPlotTable <- function(inTable, taxList){
+  newTable <- inTable[inTable[,1] %in% c(taxList,"Other_Low_Abundance"),]
+  for(sampName in unique(inTable$Sample)){
+    newTable[newTable$Sample == sampName & newTable[,1] == "Other_Low_Abundance","Value"] <- sum(newTable[newTable$Sample == sampName & newTable[,1] == "Other_Low_Abundance","Value"], inTable[inTable$Sample == sampName & !inTable[,1] %in% c(taxList,"undefined","Other_Low_Abundance"),"Value"])
+  }
+  return(newTable)
+}
+
+# Function for pulling the top abundant taxa from a given set of samples
+getTop <- function(inTable, minVal=1000){
+  tmp <- inTable[apply(inTable,1,mean)>=minVal | rownames(inTable) %in% c("Other_Low_Abundance"),]
+  return(rownames(tmp)[order(apply(tmp,1,mean))])
+}
+
+topHealthyPhyla <- getTop(CPMphyla[,map$Sample[map$MothChild=="Infant" & map$InfectionStatus=="Healthy"]],1000)
+topSickPhyla <- getTop(CPMphyla[,map$Sample[map$MothChild=="Infant" & map$InfectionStatus=="RespiratoryIllness"]],1000)
+topAllPhyla <- c(topHealthyPhyla, topSickPhyla[!topSickPhyla%in%topHealthyPhyla])
+
+topHealthyGenus <- getTop(CPMgenus[,map$Sample[map$MothChild=="Infant" & map$InfectionStatus=="Healthy"]],5000)
+topSickGenus <- getTop(CPMgenus[,map$Sample[map$MothChild=="Infant" & map$InfectionStatus=="RespiratoryIllness"]],5000)
+topAllGenus <- c("Other_Low_Abundance",topSickGenus[!topSickGenus%in%topHealthyGenus], topHealthyGenus[-1])
+
+topHealthySpecies <- getTop(CPMspecies[,map$Sample[map$MothChild=="Infant" & map$InfectionStatus=="Healthy"]],5000)
+topSickSpecies <- getTop(CPMspecies[,map$Sample[map$MothChild=="Infant" & map$InfectionStatus=="RespiratoryIllness"]],5000)
+topAllSpecies <- c("Other_Low_Abundance",topSickSpecies[!topSickSpecies%in%topHealthySpecies], topHealthySpecies[-1])
+
+sickPhyla <- pullPlotTable(CPMggPhyla,topAllPhyla)
+sickGenus <- pullPlotTable(CPMggGenus,topAllGenus)
+sickSpecies <- pullPlotTable(CPMggSpecies,topAllSpecies)
+
+cat("#### Phylum {.tabset}")
+
+for(infant in sickInfants){
+  cat("\n#####",infant,"\n")
+  myPlot <- ggplot(sickPhyla[sickPhyla$Subject == infant & sickPhyla$Age < 1000,], aes(x=TimeBin,y=Value,fill=factor(Phylum, levels=topAllPhyla))) +
+  scale_fill_manual(name="Phylum",values=col_vector[c(7,8,9,23,5,6)]) +
+  geom_bar(stat="identity",position="fill") +
+  ggtitle("Phylum abundance over time\nin SRTI infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Average relative abundance") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+  print(myPlot)
+  cat("\n")
+}
+
+cat("#### Genus {.tabset}")
+
+for(infant in sickInfants){
+  cat("\n#####",infant,"\n")
+  myPlot <- ggplot(sickGenus[sickGenus$Subject == infant & sickGenus$Age < 1000,], aes(x=Age,y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Delftia","Proteus","Ochrobactrum","Other_Low_Abundance"))))) +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,23,24,25,16))]) +
+  geom_bar(stat="identity",position="fill") +
+  ggtitle("Genus abundance over time\nin SRTI infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Average relative abundance") #+
+#  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+  print(myPlot)
+  cat("\n")
+}
+
+cat("#### Species {.tabset}")
+
+for(infant in sickInfants){
+  cat("\n#####",infant,"\n")
+  myPlot <- ggplot(sickSpecies[sickSpecies$Subject == infant & sickSpecies$Age < 1000,], aes(x=TimeBin,y=Value,fill=factor(Species, levels=rev(c("Moraxella_nonliquefaciens","Moraxella_catarrhalis","Streptococcus_pneumoniae","Streptococcus_mitis","Streptococcus_salivarius","Haemophilus_influenzae","Dolosigranulum_pigrum","Paracoccus_yeei","Anaerobacillus_alkalilacustris","Pseudomonas_aeruginosa","Staphylococcus_simiae","Staphylococcus_epidermidis","Staphylococcus_haemolyticus","Staphylococcus_capitis","Corynebacterium_pseudodiphtheriticum","Corynebacterium_accolens","Corynebacterium_aurimucosum","Corynebacterium_simulans","Delftia_acidovorans","Bacillus_pseudofirmus","Proteus_mirabilis","Acinetobacter_johnsonii","Ochrobactrum_pseudogrignonense","Other_Low_Abundance"))))) +
+  scale_fill_manual(name="Species",values=col_vector[rev(c(14,43,18,30,5,13,12,15,9,29,17,37,71,17,11,2,26,2,23,10,24,22,25,16))]) +
+  geom_bar(stat="identity",position="fill") +
+  ggtitle("Species abundance over time\nin SRTI infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Average relative abundance") +
+  scale_x_continuous(breaks=c(0:6),labels=c("0-15","16-31","32-47","48-63","64-79","80-95","96-120"))
+  print(myPlot)
+  cat("\n")
+}
+
+cat("#### Sick Genus Part 2 {.tabset}")
+
+for(infant in sickInfants){
+  cat("\n#####",infant,"\n")
+  myPlot <- ggplot(sickGenus[sickGenus$Subject == infant & sickGenus$Age < 1000,], aes(x=factor(Age),y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Delftia","Proteus","Ochrobactrum","Other_Low_Abundance"))))) +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,23,24,25,28))]) +
+  geom_bar(stat="identity",position="fill") +
+  ggtitle("Genus abundance over time\nin SRTI infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Average relative abundance") #+
+  #scale_x_discrete()
+  print(myPlot)
+  cat("\n")
+}
+
+cat("#### Healthy Genus {.tabset}")
+
+for(infant in healthyInfants){
+  cat("\n#####",infant,"\n")
+  myPlot <- ggplot(sickGenus[sickGenus$Subject == infant & sickGenus$Age < 1000,], aes(x=factor(Age),y=Value,fill=factor(Genus, levels=rev(c("Moraxella","Streptococcus","Haemophilus","Dolosigranulum","Bacillus","Paracoccus","Acinetobacter","Anaerobacillus","Pseudomonas","Staphylococcus","Corynebacterium","Delftia","Proteus","Ochrobactrum","Other_Low_Abundance"))))) +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(14,18,13,12,10,15,22,9,29,17,11,23,24,25,28))]) +
+  geom_bar(stat="identity",position="fill") +
+  ggtitle("Genus abundance over time\nin SRTI infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16), axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Age (days)", y="Average relative abundance") #+
+  #scale_x_discrete()
+  print(myPlot)
+  cat("\n")
+}
+
+
+```
+
+```{r,message=FALSE}
+for(infant in sickInfants){
+  myPlot <- plot(map[map$Subject==infant & map$Age < 1000,"Age"],map[map$Subject==infant & map$Age < 1000,"Shannon"],main=infant,xlab="Age",ylab="Shannon Index")
+  print(myPlot)
+}
+```

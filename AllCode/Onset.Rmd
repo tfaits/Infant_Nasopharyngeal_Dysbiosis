@@ -1,0 +1,43 @@
+---
+title: "Onset"
+author: "Tyler Faits"
+date: "2/7/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+OnsetSymp
+
+ggplot(CPMggGenus[CPMggGenus$Genus %in% colnames(sickResGen)[sickResGen<0.1][c(1,3,28,44)] & !is.na(CPMggGenus$Onset),],aes(x=Onset, y=Zscore, fill=factor(Genus))) +
+  geom_boxplot() +
+  scale_fill_manual(name="Genus",values=col_vector[rev(c(1:4))]) +
+  facet_grid(~Genus,scales="free",space="free") +
+  ggtitle("Genus abundance in sick vs healthy infants") +
+  theme(plot.title = element_text(hjust = 0.5,face="bold",size=16),
+        axis.text.x=element_text(face="bold",size=10,angle=45),
+        axis.title=element_text(face="bold",size=14)) +
+  labs(x="Symptom status", y="Z scores of log(cpm)")
+
+BetaDivMap <- as.matrix(vegdist(t(CPMgenus[,map$Sample[map$MothChild=="Infant" & map$Sample %in% colnames(CPMgenus) & map$Age < 1000]]), method="bray"))
+
+typicalDistance <- list()
+for(ageGroup in 0:6){
+  healthDists <- c()
+  tmpMap <- BetaDivMap[map$Sample[map$InfectionStatus=="Healthy" & map$timepoint==ageGroup &
+                                    map$MothChild=="Infant" & map$Sample %in% colnames(BetaDivMap)],map$Sample[map$InfectionStatus=="Healthy" & map$timepoint==ageGroup &
+                                    map$MothChild=="Infant" & map$Sample %in% colnames(BetaDivMap)]]
+  for(i in 1:nrow(tmpMap)){
+    healthDists <- c(healthDists,median(tmpMap[i,-i]))
+  }
+  typicalDistance[[ageGroup+1]] <- healthDists
+}
+
+boxplot(typicalDistance)
+
+sickDistance <- c()
+for(sickKid in OnsetSymp){
+  sickDistance <- c(sickDistance, median(BetaDivMap[sickKid,map$Sample[map$InfectionStatus=="Healthy" & map$timepoint==map$timepoint[map$Sample==sickKid] &
+                                    map$MothChild=="Infant" & map$Sample %in% colnames(BetaDivMap)]]))
+}
+
+```
